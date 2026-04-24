@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crazy_@Krish</title>
+  <link rel="icon" type="image/png" href="images/icon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="blob blob-1"></div>
+<div class="blob blob-2"></div>
+<div class="blob blob-3"></div>
+
+<button class="admin-fab" id="admin-fab" onclick="openAdmin()" title="Manage Site">&#9881;</button>
+<div class="pinata-pill" id="pinata-pill" onclick="openPinataModal()">&#128204; PINATA</div>
+
+<nav>
+  <div class="logo" id="logo-trigger"></div>
+  <ul class="nav-links">
+    <li><a href="#about">About</a></li>
+    <li><a href="#skills">Skills</a></li>
+    <li><a href="#projects">Projects</a></li>
+    <li><a href="#experience">Experience</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul>
+  <a href="#contact" class="nav-cta">Hire Me</a>
+</nav>
+
+<section id="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">Available for opportunities</div>
+    <h1 class="hero-name">Kr<span class="line2">ish.</span></h1>
+    <p class="hero-role">Software Engineer &amp; Blockchain Developer</p>
+    <p class="hero-desc">I build full-stack web applications, blockchain systems, and database-driven platforms. Focused on clean architecture, performance, and shipping products that work.</p>
+    <div class="hero-actions">
+      <a href="#" class="btn btn-fill">Download CV</a>
+      <a href="https://github.com" target="_blank" class="btn btn-ghost">GitHub Profile &#8599;</a>
+    </div>
+  </div>
+  <div class="hero-photo-wrap">
+    <div class="hero-photo-frame">
+      <img src="images/download.png" alt="Krish" />
+    </div>
+    <div class="photo-badge">Open to Work</div>
+  </div>
+  <div class="hero-scroll"></div>
+</section>
+
+<section id="about">
+  <div class="section-wrap">
+    <div class="reveal">
+      <div class="section-label"></div>
+      <h2 class="section-heading">Crafting <span>Digital</span><br>Experiences</h2>
+      <p class="about-text">Passionate Software Engineer with hands-on experience in full-stack web development, blockchain applications, and database-driven systems. I build scalable, well-architected solutions to complex technical challenges.</p>
+      <p class="about-text">From seamless user interfaces to secure smart contracts on Ethereum, I bring a holistic perspective to every project &mdash; combining engineering precision with product thinking.</p>
+      <div class="stats-row" id="stats-row"></div>
+    </div>
+    <div class="reveal">
+      <div class="code-card">
+        <div class="code-bar">
+          <div class="cb" style="background:#ff5f57"></div>
+          <div class="cb" style="background:#febc2e"></div>
+          <div class="cb" style="background:#28c840"></div>
+          <span style="margin-left:.5rem;font-family:'JetBrains Mono',monospace;font-size:.65rem;color:#2d4a5a">Welcome want to know about me ?</span>
+        </div>
+        <div class="code-content" id="typewriter-output"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="skills">
+  <div class="section-wrap">
+    <div class="reveal">
+      <div class="section-label"></div>
+      <h2 class="section-heading">Skills &amp; <span>Technologies</span></h2>
+    </div>
+    <div class="skills-grid" id="skills-grid"></div>
+  </div>
+</section>
+
+<section id="projects">
+  <div class="section-wrap">
+    <div class="reveal">
+      <div class="section-label"></div>
+      <h2 class="section-heading">Selected <span>Projects</span></h2>
+      <div class="filter-row" id="filter-row">
+        <button class="fbtn active" onclick="filter('all',this)">All</button>
+        <button class="fbtn" onclick="filter('blockchain',this)">Blockchain</button>
+        <button class="fbtn" onclick="filter('web',this)">Web</button>
+        <button class="fbtn" onclick="filter('mobile',this)">Mobile App</button>
+      </div>
+    </div>
+    <div class="projects-grid" id="projects-grid"></div>
+  </div>
+</section>
+
+<section id="experience">
+  <div class="section-wrap">
+    <div class="reveal">
+      <div class="section-label">Work History</div>
+      <h2 class="section-heading">Experience</h2>
+    </div>
+    <div class="timeline reveal" id="timeline"></div>
+  </div>
+</section>
+
+<section id="education">
+  <div class="section-wrap" style="padding-top:0">
+    <div class="reveal">
+      <div class="section-label">Academic Background</div>
+      <h2 class="section-heading" style="margin-bottom:2rem">Education</h2>
+      <div class="edu-grid" id="edu-grid"></div>
+    </div>
+  </div>
+</section>
+
+<section id="contact">
+  <div class="section-wrap">
+    <div class="reveal">
+      <div class="section-label" style="justify-content:center">Let's Connect</div>
+      <h2 class="contact-heading">Get In <span>Touch</span></h2>
+      <p class="contact-sub">Available for freelance, internships, and full-time opportunities.</p>
+      <div class="contact-cards" id="contact-cards"></div>
+      <a href="#" class="btn btn-fill">Download CV</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span style="color:var(--muted)">&copy; 2026 <span>@_Krish</span></span>
+  <span style="color:var(--muted)">Software Engineer</span>
+</footer>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+<script src="main.js"></script>
+
+</body>
+</html>
