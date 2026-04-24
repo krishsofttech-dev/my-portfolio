@@ -19,30 +19,75 @@
     var s = document.createElement('script');
     s.src = src;
     s.onload = function() { loaded++; if (loaded === scripts.length) onFirebaseReady(); };
+    s.onerror = function() {
+      console.error('Failed to load Firebase script:', src);
+      loaded++;
+      if (loaded === scripts.length) loadDefaultData();
+    };
     document.head.appendChild(s);
   });
 })();
 
-var _db = null;
+var _db   = null;
 var _auth = null;
+var _fbInitialised = false;
 
+// ═══════════════════════════════════════════════════════════════════════
+//  FIREBASE INIT
+// ═══════════════════════════════════════════════════════════════════════
 function onFirebaseReady() {
-  firebase.initializeApp(firebaseConfig);
-  _auth = firebase.auth();
-  _db   = firebase.firestore();
+  try {
+    firebase.initializeApp(firebaseConfig);
+    _auth = firebase.auth();
+    _db   = firebase.firestore();
 
-  _auth.onAuthStateChanged(function(user) {
-    if (user) { unlockAdmin(); } else { lockAdmin(); }
-  });
+    _auth.onAuthStateChanged(function(user) {
+      if (user) { unlockAdmin(); } else { lockAdmin(); }
+    });
 
-  window._fbAuth = _auth;
-  window._fbDb   = _db;
+    window._fbAuth = _auth;
+    window._fbDb   = _db;
 
-  loadAllFromFirestore();
+    // Timeout fallback — if Firestore takes >8s on slow mobile, load defaults
+    var fbTimeout = setTimeout(function() {
+      if (!_fbInitialised) {
+        console.warn('Firebase timeout — falling back to defaults');
+        loadDefaultData();
+      }
+    }, 8000);
+
+    loadAllFromFirestore(function() {
+      _fbInitialised = true;
+      clearTimeout(fbTimeout);
+    });
+
+  } catch(e) {
+    console.error('Firebase init error:', e);
+    loadDefaultData();
+  }
+}
+
+// Load pure defaults without Firestore (fallback)
+function loadDefaultData() {
+  if (_fbInitialised) return; // already loaded
+  _fbInitialised = true;
+  stats      = DEFAULT_STATS;
+  skills     = DEFAULT_SKILLS;
+  projects   = DEFAULT_PROJECTS;
+  experience = DEFAULT_EXPERIENCE;
+  education  = DEFAULT_EDUCATION;
+  contact    = DEFAULT_CONTACT;
+  profile    = Object.assign({}, DEFAULT_PROFILE);
+  pinataJWT  = '';
+  updatePinataLabel();
+  renderStats(); renderSkills(); renderProjects();
+  renderExperience(); renderEducation(); renderContact();
+  applyProfileLinks();
+  startTypewriter();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  FIRESTORE HELPERS — replaces lsGet / lsSet completely
+//  FIRESTORE HELPERS
 // ═══════════════════════════════════════════════════════════════════════
 function fsGet(key, callback) {
   if (!_db) { callback(null); return; }
@@ -50,7 +95,10 @@ function fsGet(key, callback) {
     .then(function(doc) {
       callback(doc.exists && doc.data().value !== undefined ? doc.data().value : null);
     })
-    .catch(function() { callback(null); });
+    .catch(function(err) {
+      console.error('fsGet failed for key:', key, err);
+      callback(null);
+    });
 }
 
 function fsSet(key, value) {
@@ -59,7 +107,13 @@ function fsSet(key, value) {
     .catch(function(e) { console.error('Firestore write error:', e); });
 }
 
-function loadAllFromFirestore() {
+function loadAllFromFirestore(onDone) {
+  if (!_db) {
+    console.warn('_db is null — loading defaults');
+    loadDefaultData();
+    if (onDone) onDone();
+    return;
+  }
   var keys = ['stats','skills','projects','experience','education','contact','profile','pinataJWT'];
   var loaded = 0, results = {};
   keys.forEach(function(key) {
@@ -80,6 +134,7 @@ function loadAllFromFirestore() {
         renderExperience(); renderEducation(); renderContact();
         applyProfileLinks();
         startTypewriter();
+        if (onDone) onDone();
       }
     });
   });
@@ -268,7 +323,7 @@ function saveLinksForm(){
   profile.linkedinUrl=(document.getElementById('lnk-linkedin').value||'').trim();
   profile.cvDirectUrl=(document.getElementById('lnk-cv-url').value||'').trim();
   profile.cvFileName=(document.getElementById('lnk-cv-name').value||'CV.pdf').trim();
-  fsSet('profile',profile);   // ← FIRESTORE
+  fsSet('profile',profile);
   applyProfileLinks();activeSect='links';openAdmin();showToast('Links saved ✓');
 }
 
@@ -276,25 +331,122 @@ function triggerCvUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);ret
 
 async function uploadCv(inp){
   var file=inp.files[0];if(!file)return;
-  var lbl=document.getElementById('cv-up-label');if(lbl)lbl.textContent='Uploading…';
+  var lbl=document.getElementById('cv-up-label');if(lbl)lbl.textContent='Uploading… 0%';
   try{
-    var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:file.name||'CV.pdf'}));
-    var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});
-    if(!res.ok)throw new Error(await res.text());
-    var data=await res.json();
+    var data = await pinataUploadWithProgress(file, file.name||'CV.pdf', function(pct){
+      if(lbl) lbl.textContent='Uploading… '+pct+'%';
+    });
     profile.cvIpfsHash=data.IpfsHash;profile.cvFileName=file.name||'CV.pdf';profile.cvDirectUrl='';
-    fsSet('profile',profile);   // ← FIRESTORE
+    fsSet('profile',profile);
     applyProfileLinks();showToast('CV uploaded to IPFS ✓');
     activeSect='links';document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
-  }catch(e){showToast('Upload failed: '+e.message,true);if(lbl)lbl.textContent='📤 Click to upload PDF';}
+  }catch(e){
+    showToast('Upload failed: '+e.message,true);
+    if(lbl)lbl.textContent='📤 Click to upload PDF';
+  }
 }
 
 function removeCv(){
   if(!confirm('Remove CV?'))return;
   profile.cvIpfsHash='';
-  fsSet('profile',profile);   // ← FIRESTORE
+  fsSet('profile',profile);
   applyProfileLinks();showToast('CV removed');
   document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PINATA UPLOAD HELPERS — retry + progress
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Upload a file to Pinata with automatic retries on network errors.
+ * @param {File} file
+ * @param {string} name  - metadata name
+ * @param {number} retries - max attempts (default 3)
+ */
+async function pinataUpload(file, name, retries) {
+  retries = retries || 3;
+  var lastError;
+  for (var attempt = 1; attempt <= retries; attempt++) {
+    try {
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('pinataMetadata', JSON.stringify({ name: name }));
+      var res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + pinataJWT },
+        body: fd
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json(); // success — return immediately
+    } catch(e) {
+      lastError = e;
+      console.warn('Pinata upload attempt ' + attempt + ' failed:', e.message);
+      if (attempt < retries) {
+        // Wait before retrying: 1.5s, 3s, 4.5s …
+        await new Promise(function(r){ setTimeout(r, 1500 * attempt); });
+      }
+    }
+  }
+  throw lastError; // all attempts exhausted
+}
+
+/**
+ * Upload with XHR so we can show real % progress, plus retry on failure.
+ * @param {File} file
+ * @param {string} name
+ * @param {function} onProgress - called with 0-100
+ * @param {number} retries
+ */
+function pinataUploadWithProgress(file, name, onProgress, retries) {
+  retries = retries || 3;
+  var attempt = 0;
+
+  function tryUpload() {
+    attempt++;
+    return new Promise(function(resolve, reject) {
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('pinataMetadata', JSON.stringify({ name: name }));
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', 'https://api.pinata.cloud/pinning/pinFileToIPFS');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + pinataJWT);
+
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round(e.loaded / e.total * 100));
+        }
+      };
+
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          reject(new Error('HTTP ' + xhr.status + ': ' + xhr.responseText));
+        }
+      };
+
+      xhr.onerror = function() { reject(new Error('ERR_NETWORK_CHANGED or connection lost')); };
+      xhr.ontimeout = function() { reject(new Error('Upload timed out')); };
+      xhr.timeout = 120000; // 2-minute timeout per attempt
+
+      xhr.send(fd);
+    });
+  }
+
+  function run() {
+    return tryUpload().catch(function(err) {
+      console.warn('Pinata upload attempt ' + attempt + ' failed:', err.message);
+      if (attempt < retries) {
+        if (onProgress) onProgress(0); // reset progress bar
+        return new Promise(function(r){ setTimeout(r, 1500 * attempt); }).then(run);
+      }
+      throw err;
+    });
+  }
+
+  return run();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -326,7 +478,7 @@ function saveProjectForm(){
   if(!title){showToast('Title required',true);return;}
   var p={id:editingId||('p'+Date.now()),num:document.getElementById('f-num').value.trim(),emoji:document.getElementById('f-emoji').value,title:title,desc:document.getElementById('f-desc').value.trim(),tech:techTags.slice(),cat:document.getElementById('f-cat').value,github:document.getElementById('f-github').value.trim(),videoHash:currentVideoHash,imageHash:currentImgHash};
   if(editingId){projects=projects.map(function(x){return x.id===editingId?p:x;});}else{projects.push(p);}
-  fsSet('projects',projects);   // ← FIRESTORE
+  fsSet('projects',projects);
   renderProjects();activeSect='projects';openAdmin();showToast('Project saved');
 }
 
@@ -397,7 +549,7 @@ function openPinataModal(){if(!adminUnlocked)return;modal('<div class="overlay" 
 function saveJWT(){var v=document.getElementById('jwt-in').value.trim();pinataJWT=v;fsSet('pinataJWT',v);updatePinataLabel();cm('pin');showToast(v?'Pinata JWT saved':'JWT cleared');}
 
 // ═══════════════════════════════════════════════════════════════════════
-//  UPLOAD HELPERS (Pinata → IPFS)
+//  UPLOAD HELPERS (image + video — use new retry+progress functions)
 // ═══════════════════════════════════════════════════════════════════════
 function pickE(e){document.getElementById('f-emoji').value=e;document.querySelectorAll('#epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
 function tagEl(t){return '<span style="padding:.2rem .6rem;background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.2);border-radius:5px;font-size:.7rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace;display:inline-flex;align-items:center;gap:.3rem">'+esc(t)+'<span onclick="rmTag(\''+esc(t)+'\')" style="cursor:pointer;color:#f87171">&#215;</span></span>';}
@@ -405,11 +557,53 @@ function addTag(){var inp=document.getElementById('f-tech-in');var val=inp.value
 function rmTag(t){techTags=techTags.filter(function(x){return x!==t;});document.getElementById('tags-out').innerHTML=techTags.map(tagEl).join('');}
 
 function triggerUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);return;}document.getElementById('img-in').click();}
-async function uploadImg(inp){var file=inp.files[0];if(!file)return;document.getElementById('up-label').textContent='Uploading...';try{var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:document.getElementById('f-title').value||'img'}));var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});if(!res.ok)throw new Error(await res.text());var data=await res.json();currentImgHash=data.IpfsHash;document.getElementById('img-pre').innerHTML='<img src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem" alt="preview">';document.getElementById('up-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Uploaded to IPFS');}catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('up-label').textContent='📤 Click to upload';}}
+
+async function uploadImg(inp) {
+  var file = inp.files[0]; if (!file) return;
+  var lbl = document.getElementById('up-label');
+  lbl.textContent = 'Uploading… 0%';
+  try {
+    var data = await pinataUploadWithProgress(
+      file,
+      document.getElementById('f-title').value || 'img',
+      function(pct) { lbl.textContent = 'Uploading… ' + pct + '%'; }
+    );
+    currentImgHash = data.IpfsHash;
+    document.getElementById('img-pre').innerHTML =
+      '<img src="' + PINATA_GATEWAY + data.IpfsHash + '" style="max-height:70px;border-radius:6px;margin-bottom:.4rem" alt="preview">';
+    lbl.textContent = '📌 ' + data.IpfsHash.slice(0, 20) + '…';
+    showToast('Image uploaded to IPFS ✓');
+  } catch(e) {
+    showToast('Upload failed: ' + e.message, true);
+    lbl.textContent = '📤 Click to upload image';
+  }
+}
+
 function removeImg(){currentImgHash='';var pre=document.getElementById('img-pre');if(pre)pre.innerHTML='<div style="font-size:.7rem;color:#4a3a5a;margin-bottom:.4rem">No image</div>';var lbl=document.getElementById('up-label');if(lbl)lbl.textContent='📤 Click to upload image';}
 
 function triggerVideoUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);return;}document.getElementById('vid-in').click();}
-async function uploadVideo(inp){var file=inp.files[0];if(!file)return;document.getElementById('vid-label').textContent='Uploading...';try{var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:(document.getElementById('f-title').value||'video')+'-demo'}));var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});if(!res.ok)throw new Error(await res.text());var data=await res.json();currentVideoHash=data.IpfsHash;document.getElementById('vid-pre').innerHTML='<video src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem;max-width:100%" muted playsinline></video>';document.getElementById('vid-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Video uploaded to IPFS');}catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('vid-label').textContent='🎬 Click to upload video';}}
+
+async function uploadVideo(inp) {
+  var file = inp.files[0]; if (!file) return;
+  var lbl = document.getElementById('vid-label');
+  lbl.textContent = 'Uploading… 0%';
+  try {
+    var data = await pinataUploadWithProgress(
+      file,
+      (document.getElementById('f-title').value || 'video') + '-demo',
+      function(pct) { lbl.textContent = 'Uploading… ' + pct + '%'; }
+    );
+    currentVideoHash = data.IpfsHash;
+    document.getElementById('vid-pre').innerHTML =
+      '<video src="' + PINATA_GATEWAY + data.IpfsHash + '" style="max-height:70px;border-radius:6px;margin-bottom:.4rem;max-width:100%" muted playsinline></video>';
+    lbl.textContent = '📌 ' + data.IpfsHash.slice(0, 20) + '…';
+    showToast('Video uploaded to IPFS ✓');
+  } catch(e) {
+    showToast('Upload failed: ' + e.message, true);
+    lbl.textContent = '🎬 Click to upload video';
+  }
+}
+
 function removeVideo(){currentVideoHash='';var pre=document.getElementById('vid-pre');if(pre)pre.innerHTML='<div style="font-size:.7rem;color:#3a2a5a;margin-bottom:.4rem">No video</div>';var lbl=document.getElementById('vid-label');if(lbl)lbl.textContent='🎬 Click to upload video';}
 
 // ═══════════════════════════════════════════════════════════════════════
