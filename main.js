@@ -8,22 +8,6 @@
   appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
 };
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  FIREBASE CONFIG — paste your real values from Firebase Console
-// ═══════════════════════════════════════════════════════════════════════
-var firebaseConfig = {
-  apiKey:            "AIzaSyCL...",
-  authDomain:        "portfolio-fccd6.firebaseapp.com",
-  projectId:         "portfolio-fccd6",
-  storageBucket:     "portfolio-fccd6.appspot.com",
-  messagingSenderId: "66836...",
-  appId:             "1:668360..."
-};
-
-// ═══════════════════════════════════════════════════════════════════════
-//  LOAD FIREBASE SDKs — App + Auth + Firestore
-// ═══════════════════════════════════════════════════════════════════════
 (function loadFirebase() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
