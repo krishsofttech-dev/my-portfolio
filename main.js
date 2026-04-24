@@ -1,12 +1,12 @@
 
   var firebaseConfig = {
-    apiKey: "AIzaSyCLZf5H7i1qLV5-pDYuhYG9BigkNh3V9gg",
-    authDomain: "portfolio-fccd6.firebaseapp.com",
-    projectId: "portfolio-fccd6",
-    storageBucket: "portfolio-fccd6.firebasestorage.app",
-    messagingSenderId: "668360160690",
-    appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
-  };
+  apiKey: "AIzaSyCLZf5H7i1qLV5-pDYuhYG9BigkNh3V9gg",
+  authDomain: "portfolio-fccd6.firebaseapp.com",
+  projectId: "portfolio-fccd6",
+  storageBucket: "portfolio-fccd6.firebasestorage.app",
+  messagingSenderId: "668360160690",
+  appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
+};
 
 
 (function loadFirebase() {
