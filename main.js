@@ -1,5 +1,5 @@
 
-  const firebaseConfig = {
+  var firebaseConfig = {
     apiKey: "AIzaSyCLZf5H7i1qLV5-pDYuhYG9BigkNh3V9gg",
     authDomain: "portfolio-fccd6.firebaseapp.com",
     projectId: "portfolio-fccd6",
