@@ -27,7 +27,7 @@
 })();
 
 function onFirebaseReady() {
-  firebase.initializeApp(FIREBASE_CONFIG);
+  firebase.initializeApp(firebaseConfig);   
   var auth = firebase.auth();
 
   // Listen for auth state changes — this fires on page load too
