@@ -9,14 +9,14 @@
   appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
 };
 
+
 // ═══════════════════════════════════════════════════════════════════════
-//  LOAD FIREBASE SDKs — App + Auth + Realtime DB (only stores one hash)
+//  LOAD FIREBASE — Auth only
 // ═══════════════════════════════════════════════════════════════════════
 (function loadFirebase() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
-    'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js',
-    'https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js'
+    'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js'
   ];
   var loaded = 0;
   scripts.forEach(function(src) {
@@ -27,74 +27,118 @@
   });
 })();
 
-var _db   = null;
-var _auth = null;
-
 function onFirebaseReady() {
   firebase.initializeApp(firebaseConfig);
-  _auth = firebase.auth();
-  _db   = firebase.database();
-
-  _auth.onAuthStateChanged(function(user) {
+  var auth = firebase.auth();
+  auth.onAuthStateChanged(function(user) {
     if (user) { unlockAdmin(); } else { lockAdmin(); }
   });
-
-  window._fbAuth = _auth;
-  window._fbDb   = _db;
-
-  loadAllFromIPFS();
+  window._fbAuth = auth;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PINATA & IPFS CONSTANTS
+//  PINATA CONFIG
+//  All site data is stored as a JSON file on IPFS via Pinata.
+//  The "index" file is always pinned with the name: sg-site-data
+//  We fetch it by name via Pinata's pinList API.
 // ═══════════════════════════════════════════════════════════════════════
 const PINATA_GATEWAY  = 'https://gateway.pinata.cloud/ipfs/';
-const PINATA_PIN_URL  = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
-const PINATA_UNPIN_URL= 'https://api.pinata.cloud/pinning/unpin/';
-const DATA_FILE_NAME  = 'portfolio-data.json';   // name used when pinning
-const HASH_FB_KEY     = 'dataHash';    // IPFS hash pointer stored in Firebase
-const JWT_FB_KEY      = 'pinataJWT';   // JWT stored in Firebase (NOT in IPFS)
+const PINATA_API      = 'https://api.pinata.cloud';
+const DATA_FILE_NAME  = 'sg-site-data';   // fixed name — always the latest
 
-// ═══════════════════════════════════════════════════════════════════════
-//  LOAD — reads BOTH hash and JWT from Firebase first, then fetches
-//  full site data from IPFS using that hash
-// ═══════════════════════════════════════════════════════════════════════
-function loadAllFromIPFS() {
-  if (!_db) { renderDefaults(); return; }
+// pinataJWT is loaded from localStorage as fallback for the JWT
+// (only needed in admin — visitors load data publicly from IPFS)
+let pinataJWT = localStorage.getItem('sg_pinata_jwt') || '';
 
-  // Read both the data hash AND the JWT from Firebase in one call
-  _db.ref('/').get()
-    .then(function(snapshot) {
-      var root = snapshot.exists() ? snapshot.val() : {};
+// ── Load site data from Pinata by file name ───────────────────────────
+async function loadSiteData() {
+  try {
+    // Search Pinata for the file named sg-site-data
+    var res = await fetch(
+      PINATA_API + '/data/pinList?status=pinned&metadata[name]=' + DATA_FILE_NAME,
+      { headers: { Authorization: 'Bearer ' + pinataJWT } }
+    );
 
-      // Always restore JWT from Firebase first — this is critical
-      pinataJWT = root[JWT_FB_KEY] || '';
-      updatePinataLabel();
+    if (!res.ok) throw new Error('Pinata list failed');
+    var list = await res.json();
 
-      var hash = root[HASH_FB_KEY] || null;
-      if (!hash) {
-        // No data saved yet — show defaults
-        renderDefaults();
-        return;
-      }
-
-      // Fetch the full site data JSON from IPFS
-      return fetch(PINATA_GATEWAY + hash)
-        .then(function(res) {
-          if (!res.ok) throw new Error('IPFS fetch failed: ' + res.status);
-          return res.json();
-        })
-        .then(function(data) {
-          applyData(data);
-        });
-    })
-    .catch(function(e) {
-      console.error('Load error:', e);
-      renderDefaults();
-    });
+    if (list.rows && list.rows.length > 0) {
+      // Sort by most recent upload date
+      list.rows.sort(function(a, b) {
+        return new Date(b.date_pinned) - new Date(a.date_pinned);
+      });
+      var hash = list.rows[0].ipfs_pin_hash;
+      var dataRes = await fetch(PINATA_GATEWAY + hash);
+      if (!dataRes.ok) throw new Error('Failed to fetch data from IPFS');
+      var data = await dataRes.json();
+      applyData(data);
+    } else {
+      // No data on Pinata yet — use defaults
+      applyData({});
+    }
+  } catch(e) {
+    console.warn('Could not load from Pinata, using defaults:', e.message);
+    applyData({});
+  }
 }
 
-// Apply loaded IPFS data to global state and re-render everything
+// ── Save all site data to Pinata as a single JSON file ────────────────
+async function saveSiteData() {
+  if (!pinataJWT) { showToast('Set Pinata JWT first', true); return false; }
+
+  var data = {
+    stats:      stats,
+    skills:     skills,
+    projects:   projects,
+    experience: experience,
+    education:  education,
+    contact:    contact,
+    profile:    profile
+  };
+
+  try {
+    // 1. Unpin all old versions of sg-site-data
+    var listRes = await fetch(
+      PINATA_API + '/data/pinList?status=pinned&metadata[name]=' + DATA_FILE_NAME,
+      { headers: { Authorization: 'Bearer ' + pinataJWT } }
+    );
+    if (listRes.ok) {
+      var list = await listRes.json();
+      if (list.rows && list.rows.length > 0) {
+        await Promise.all(list.rows.map(function(row) {
+          return fetch(PINATA_API + '/pinning/unpin/' + row.ipfs_pin_hash, {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + pinataJWT }
+          });
+        }));
+      }
+    }
+
+    // 2. Upload new JSON
+    var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    var fd = new FormData();
+    fd.append('file', blob, DATA_FILE_NAME + '.json');
+    fd.append('pinataMetadata', JSON.stringify({ name: DATA_FILE_NAME }));
+    fd.append('pinataOptions', JSON.stringify({ cidVersion: 1 }));
+
+    var uploadRes = await fetch(PINATA_API + '/pinning/pinFileToIPFS', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + pinataJWT },
+      body: fd
+    });
+
+    if (!uploadRes.ok) throw new Error(await uploadRes.text());
+    var uploaded = await uploadRes.json();
+    console.log('Site data saved to IPFS:', uploaded.IpfsHash);
+    return true;
+
+  } catch(e) {
+    showToast('Save failed: ' + e.message, true);
+    return false;
+  }
+}
+
+// ── Apply loaded data to global vars and render ───────────────────────
 function applyData(data) {
   stats      = data.stats      || DEFAULT_STATS;
   skills     = data.skills     || DEFAULT_SKILLS;
@@ -103,7 +147,6 @@ function applyData(data) {
   education  = data.education  || DEFAULT_EDUCATION;
   contact    = data.contact    || DEFAULT_CONTACT;
   profile    = data.profile    || Object.assign({}, DEFAULT_PROFILE);
-  // NOTE: pinataJWT is NOT read from IPFS data — it comes from Firebase only
 
   updatePinataLabel();
   renderStats(); renderSkills(); renderProjects();
@@ -112,80 +155,8 @@ function applyData(data) {
   startTypewriter();
 }
 
-function renderDefaults() {
-  stats      = DEFAULT_STATS;
-  skills     = DEFAULT_SKILLS;
-  projects   = DEFAULT_PROJECTS;
-  experience = DEFAULT_EXPERIENCE;
-  education  = DEFAULT_EDUCATION;
-  contact    = DEFAULT_CONTACT;
-  profile    = Object.assign({}, DEFAULT_PROFILE);
-
-  renderStats(); renderSkills(); renderProjects();
-  renderExperience(); renderEducation(); renderContact();
-  applyProfileLinks();
-  startTypewriter();
-}
-
 // ═══════════════════════════════════════════════════════════════════════
-//  SAVE — upload full state as JSON to IPFS → store new hash in Firebase
-//  Called after every admin edit (replaces all dbSet calls)
-// ═══════════════════════════════════════════════════════════════════════
-async function saveAllToIPFS() {
-  if (!pinataJWT) {
-    showToast('Set Pinata JWT first', true);
-    return;
-  }
-
-  // Bundle site state — deliberately exclude pinataJWT (stored in Firebase only)
-  var payload = {
-    stats, skills, projects, experience,
-    education, contact, profile
-  };
-
-  var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-  var fd   = new FormData();
-  fd.append('file', blob, DATA_FILE_NAME);
-  fd.append('pinataMetadata', JSON.stringify({ name: DATA_FILE_NAME }));
-  fd.append('pinataOptions', JSON.stringify({ cidVersion: 1 }));
-
-  try {
-    var res = await fetch(PINATA_PIN_URL, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + pinataJWT },
-      body: fd
-    });
-    if (!res.ok) throw new Error(await res.text());
-
-    var data    = await res.json();
-    var newHash = data.IpfsHash;
-
-    // Get old hash so we can unpin it after saving the new one
-    var oldSnap = await _db.ref(HASH_FB_KEY).get();
-    var oldHash = oldSnap.exists() ? oldSnap.val() : null;
-
-    // Write new hash to Firebase
-    await _db.ref(HASH_FB_KEY).set(newHash);
-
-    // Unpin the old hash (silent — not critical if it fails)
-    if (oldHash && oldHash !== newHash) {
-      fetch(PINATA_UNPIN_URL + oldHash, {
-        method: 'DELETE',
-        headers: { Authorization: 'Bearer ' + pinataJWT }
-      }).catch(function() {});
-    }
-
-    return newHash;
-
-  } catch (e) {
-    console.error('saveAllToIPFS error:', e);
-    showToast('Save failed: ' + e.message, true);
-    throw e;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PINATA & SITE CONSTANTS
+//  DEFAULT DATA — shown until Pinata data loads or on first run
 // ═══════════════════════════════════════════════════════════════════════
 const DEFAULT_STATS = [
   { id:'stat1', value:5,  suffix:'+', label:'Projects' },
@@ -231,42 +202,39 @@ const DEFAULT_PROFILE = {
 };
 
 const CAT_COLORS = {
-  blockchain: { text:'#3b82f6', bg:'rgba(59,130,246,.1)',  border:'rgba(59,130,246,.25)' },
-  web:        { text:'#10b981', bg:'rgba(16,185,129,.1)',  border:'rgba(16,185,129,.25)' },
-  mobile:     { text:'#00d4ff', bg:'rgba(0,212,255,.1)',   border:'rgba(0,212,255,.25)'  },
-  ai:         { text:'#f97316', bg:'rgba(249,115,22,.1)',  border:'rgba(249,115,22,.25)' },
-  other:      { text:'#f43f5e', bg:'rgba(244,63,94,.1)',   border:'rgba(244,63,94,.25)'  }
+  blockchain:{ text:'#3b82f6', bg:'rgba(59,130,246,.1)',  border:'rgba(59,130,246,.25)' },
+  web:       { text:'#10b981', bg:'rgba(16,185,129,.1)',  border:'rgba(16,185,129,.25)' },
+  mobile:    { text:'#00d4ff', bg:'rgba(0,212,255,.1)',   border:'rgba(0,212,255,.25)'  },
+  ai:        { text:'#f97316', bg:'rgba(249,115,22,.1)',  border:'rgba(249,115,22,.25)' },
+  other:     { text:'#f43f5e', bg:'rgba(244,63,94,.1)',   border:'rgba(244,63,94,.25)'  }
 };
 
 // ── Global state ──────────────────────────────────────────────────────
 let stats=[], skills=[], projects=[], experience=[], education=[], contact=[];
 let profile={};
-let pinataJWT='', activeFilter='all', editingId=null, techTags=[];
+let activeFilter='all', editingId=null, techTags=[];
 let currentImgHash='', currentVideoHash='';
 let adminUnlocked=false, activeSect='projects';
+
+// ── Start: load data from Pinata then start page ──────────────────────
+// Show defaults immediately so page renders fast
+applyData({});
+// Then load real data from Pinata in background
+loadSiteData();
 
 // ═══════════════════════════════════════════════════════════════════════
 //  PROFILE LINKS
 // ═══════════════════════════════════════════════════════════════════════
-function applyProfileLinks() {
-  var cvUrl = profile.cvIpfsHash ? (PINATA_GATEWAY+profile.cvIpfsHash) : (profile.cvDirectUrl||'#');
-  document.querySelectorAll('[data-cv-btn],.btn-cv').forEach(function(el) {
-    el.href=cvUrl;
-    if(cvUrl!=='#'){el.setAttribute('download',profile.cvFileName||'CV.pdf');el.removeAttribute('target');}
-    else{el.removeAttribute('download');}
-  });
+function applyProfileLinks(){
+  var cvUrl=profile.cvIpfsHash?(PINATA_GATEWAY+profile.cvIpfsHash):(profile.cvDirectUrl||'#');
+  document.querySelectorAll('[data-cv-btn],.btn-cv').forEach(function(el){el.href=cvUrl;if(cvUrl!=='#'){el.setAttribute('download',profile.cvFileName||'CV.pdf');el.removeAttribute('target');}else{el.removeAttribute('download');}});
   document.querySelectorAll('[data-github-btn],.btn-github').forEach(function(el){if(profile.githubUrl)el.href=profile.githubUrl;});
   document.querySelectorAll('[data-linkedin-btn],.btn-linkedin').forEach(function(el){if(profile.linkedinUrl)el.href=profile.linkedinUrl;});
-  document.querySelectorAll('.hero-actions .btn,#contact .btn,footer a').forEach(function(el){
-    var txt=el.textContent.trim().toLowerCase();
-    if(txt.includes('download cv')||txt.includes('cv')){el.href=cvUrl;if(cvUrl!=='#')el.setAttribute('download',profile.cvFileName||'CV.pdf');}
-    if(txt.includes('github')&&profile.githubUrl)el.href=profile.githubUrl;
-    if(txt.includes('linkedin')&&profile.linkedinUrl)el.href=profile.linkedinUrl;
-  });
+  document.querySelectorAll('.hero-actions .btn,#contact .btn,footer a').forEach(function(el){var txt=el.textContent.trim().toLowerCase();if(txt.includes('download cv')||txt.includes('cv')){el.href=cvUrl;if(cvUrl!=='#')el.setAttribute('download',profile.cvFileName||'CV.pdf');}if(txt.includes('github')&&profile.githubUrl)el.href=profile.githubUrl;if(txt.includes('linkedin')&&profile.linkedinUrl)el.href=profile.linkedinUrl;});
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  FIREBASE AUTH
+//  AUTH
 // ═══════════════════════════════════════════════════════════════════════
 function unlockAdmin(){
   adminUnlocked=true;
@@ -274,7 +242,10 @@ function unlockAdmin(){
   if(fab)fab.classList.add('unlocked');
   if(pill)pill.classList.add('unlocked');
   updatePinataLabel();
+  // Load fresh data from Pinata when admin logs in
+  loadSiteData();
 }
+
 function lockAdmin(){
   adminUnlocked=false;
   var fab=document.getElementById('admin-fab'),pill=document.getElementById('pinata-pill');
@@ -327,28 +298,9 @@ function signInWithGoogle(){
     .catch(function(err){showAuthError(friendlyAuthError(err.code));});
 }
 
-function signOut(){
-  if(!window._fbAuth)return;
-  window._fbAuth.signOut().then(function(){showToast('Signed out');cm('adm');});
-}
+function signOut(){if(!window._fbAuth)return;window._fbAuth.signOut().then(function(){showToast('Signed out');cm('adm');});}
 
-function friendlyAuthError(c){
-  return({'auth/invalid-email':'Invalid email address.','auth/user-not-found':'No account found.','auth/wrong-password':'Incorrect password.','auth/invalid-credential':'Incorrect email or password.','auth/too-many-requests':'Too many attempts. Try again later.','auth/network-request-failed':'Network error.','auth/popup-closed-by-user':'Popup closed.','auth/unauthorized-domain':'Domain not authorised in Firebase.'}[c]||'Sign-in failed ('+c+').');
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  SAVE HELPER — wraps saveAllToIPFS with UI feedback
-//  Use this instead of old dbSet() calls
-// ═══════════════════════════════════════════════════════════════════════
-async function persistAndToast(successMsg) {
-  showToast('Saving…');
-  try {
-    await saveAllToIPFS();
-    showToast(successMsg || 'Saved ✓');
-  } catch(e) {
-    // error toast already shown inside saveAllToIPFS
-  }
-}
+function friendlyAuthError(c){return({'auth/invalid-email':'Invalid email address.','auth/user-not-found':'No account found.','auth/wrong-password':'Incorrect password.','auth/invalid-credential':'Incorrect email or password.','auth/too-many-requests':'Too many attempts. Try again later.','auth/network-request-failed':'Network error.','auth/popup-closed-by-user':'Popup closed.','auth/unauthorized-domain':'Domain not authorised in Firebase.'}[c]||'Sign-in failed ('+c+').');}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL
@@ -363,20 +315,66 @@ function openAdmin(){
   modal('<div class="overlay" id="adm" onclick="oci(event,\'adm\')"><div class="mbox" style="max-width:600px"><button class="mclose" onclick="cm(\'adm\')">&#10005;</button><div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1.4rem;align-items:center">'+tabHTML+soBtn+'</div><div id="admin-tab-content">'+getTabContent(activeSect)+'</div></div></div>');
 }
 
-function switchAdminTab(key){
-  activeSect=key;
-  document.querySelectorAll('[id^="atab-"]').forEach(function(b){var k=b.id.replace('atab-','');b.style.border=k===key?'1px solid rgba(0,212,255,.5)':'1px solid var(--border)';b.style.background=k===key?'rgba(0,212,255,.1)':'transparent';b.style.color=k===key?'var(--cyan)':'var(--muted)';});
-  document.getElementById('admin-tab-content').innerHTML=getTabContent(key);
+function switchAdminTab(key){activeSect=key;document.querySelectorAll('[id^="atab-"]').forEach(function(b){var k=b.id.replace('atab-','');b.style.border=k===key?'1px solid rgba(0,212,255,.5)':'1px solid var(--border)';b.style.background=k===key?'rgba(0,212,255,.1)':'transparent';b.style.color=k===key?'var(--cyan)':'var(--muted)';});document.getElementById('admin-tab-content').innerHTML=getTabContent(key);}
+function getTabContent(key){switch(key){case'projects':return buildProjectsTab();case'skills':return buildSkillsTab();case'stats':return buildStatsTab();case'experience':return buildExperienceTab();case'education':return buildEducationTab();case'contact':return buildContactTab();case'links':return buildLinksTab();default:return'';}}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SAVE HELPER — saves all data to Pinata then shows toast
+// ═══════════════════════════════════════════════════════════════════════
+async function saveAndSync(successMsg) {
+  showToast('Saving to Pinata…');
+  var ok = await saveSiteData();
+  if (ok) { showToast(successMsg || 'Saved ✓'); }
 }
 
-function getTabContent(key){switch(key){case'projects':return buildProjectsTab();case'skills':return buildSkillsTab();case'stats':return buildStatsTab();case'experience':return buildExperienceTab();case'education':return buildEducationTab();case'contact':return buildContactTab();case'links':return buildLinksTab();default:return'';}}
+// ═══════════════════════════════════════════════════════════════════════
+//  PINATA JWT MODAL
+// ═══════════════════════════════════════════════════════════════════════
+function openPinataModal(){
+  if(!adminUnlocked)return;
+  modal('<div class="overlay" id="pin" onclick="oci(event,\'pin\')"><div class="mbox" style="max-width:420px"><button class="mclose" onclick="cm(\'pin\')">&#10005;</button><div style="font-size:1.8rem;margin-bottom:.6rem">&#128204;</div><div style="font-weight:600;color:#e6008a;margin-bottom:.5rem">Pinata Configuration</div><div style="font-size:.78rem;color:var(--muted);line-height:1.75;margin-bottom:1.3rem">Your Pinata JWT is required to save and load all site data.<br>Get it from <span style="color:#e6008a">app.pinata.cloud → API Keys</span>.</div><div class="frow"><label class="flabel">JWT Token</label><textarea class="finput" id="jwt-in" style="min-height:80px;font-size:.7rem;word-break:break-all;resize:vertical" placeholder="eyJhbGci...">'+pinataJWT+'</textarea></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1rem"><button onclick="cm(\'pin\')" style="padding:.6rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button onclick="saveJWT()" style="padding:.6rem 1.5rem;background:#e6008a;border:none;border-radius:6px;color:#fff;font-size:.78rem;font-weight:700;cursor:pointer">Save</button></div></div></div>');
+}
+
+function saveJWT(){
+  var v=document.getElementById('jwt-in').value.trim();
+  pinataJWT=v;
+  localStorage.setItem('sg_pinata_jwt',v);
+  updatePinataLabel();
+  cm('pin');
+  showToast(v?'Pinata JWT saved — reloading data…':'JWT cleared');
+  if(v) loadSiteData();
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  LINKS TAB
 // ═══════════════════════════════════════════════════════════════════════
 function buildLinksTab(){
   var cvStatus=profile.cvIpfsHash?'<span style="color:#10b981;font-size:.72rem;font-family:\'JetBrains Mono\',monospace">✓ IPFS: '+profile.cvIpfsHash.slice(0,24)+'…</span>':(profile.cvDirectUrl?'<span style="color:#f97316;font-size:.72rem">✓ Direct URL set</span>':'<span style="color:var(--muted);font-size:.72rem">No CV uploaded</span>');
-  return '<div style="display:flex;flex-direction:column;gap:1.2rem"><div style="background:rgba(0,212,255,.03);border:1px solid rgba(0,212,255,.12);border-radius:10px;padding:1.1rem"><div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem"><span style="font-size:1.15rem">📄</span><span style="font-size:.82rem;font-weight:600;color:var(--cyan)">CV / Resume</span><span style="margin-left:auto">'+cvStatus+'</span></div><div class="frow" style="margin-bottom:.7rem"><label class="flabel">Upload CV (PDF) via Pinata → IPFS</label><div class="upload-zone" onclick="triggerCvUp()" style="border-color:rgba(0,212,255,.2)"><div id="cv-pre">'+(profile.cvIpfsHash?'<div style="font-size:.72rem;color:#10b981;font-family:\'JetBrains Mono\',monospace;margin-bottom:.3rem">📌 '+profile.cvIpfsHash.slice(0,30)+'…</div>':'<div style="font-size:.7rem;color:#4a5a6a;margin-bottom:.3rem">No file uploaded</div>')+'</div><input type="file" id="cv-file-in" accept=".pdf,application/pdf" style="display:none" onchange="uploadCv(this)"><div id="cv-up-label" style="font-size:.72rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">📤 Click to upload PDF</div></div>'+(profile.cvIpfsHash?'<button onclick="removeCv()" class="abtn-del" style="margin-top:.5rem">× Remove CV</button>':'')+'</div><div style="display:flex;align-items:center;gap:.6rem;margin:.2rem 0 .7rem"><div style="flex:1;height:1px;background:var(--border)"></div><span style="font-size:.65rem;color:var(--muted);font-family:\'JetBrains Mono\',monospace">OR</span><div style="flex:1;height:1px;background:var(--border)"></div></div><div class="frow" style="margin-bottom:.7rem"><label class="flabel">Direct CV URL</label><input class="finput" id="lnk-cv-url" value="'+esc(profile.cvDirectUrl||'')+'" placeholder="https://drive.google.com/file/d/..."></div><div class="frow"><label class="flabel">CV File Name</label><input class="finput" id="lnk-cv-name" value="'+esc(profile.cvFileName||'CV.pdf')+'" placeholder="YourName_CV.pdf"></div></div><div style="background:rgba(139,92,246,.03);border:1px solid rgba(139,92,246,.12);border-radius:10px;padding:1.1rem"><div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem"><span style="font-size:1.15rem">🔗</span><span style="font-size:.82rem;font-weight:600;color:var(--purple)">Social Links</span></div><div class="frow"><label class="flabel">GitHub Profile URL</label><input class="finput" id="lnk-github" value="'+esc(profile.githubUrl||'')+'" placeholder="https://github.com/yourusername"></div><div class="frow"><label class="flabel">LinkedIn Profile URL</label><input class="finput" id="lnk-linkedin" value="'+esc(profile.linkedinUrl||'')+'" placeholder="https://linkedin.com/in/yourusername"></div></div><div style="display:flex;gap:.75rem;justify-content:flex-end"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveLinksForm()">Save Links</button></div></div>';
+  return '<div style="display:flex;flex-direction:column;gap:1.2rem">' +
+    '<div style="background:rgba(0,212,255,.03);border:1px solid rgba(0,212,255,.12);border-radius:10px;padding:1.1rem">' +
+      '<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem"><span style="font-size:1.15rem">📄</span><span style="font-size:.82rem;font-weight:600;color:var(--cyan)">CV / Resume</span><span style="margin-left:auto">'+cvStatus+'</span></div>' +
+      '<div class="frow" style="margin-bottom:.7rem"><label class="flabel">Upload CV (PDF) → stored on IPFS via Pinata</label>' +
+        '<div class="upload-zone" onclick="triggerCvUp()" style="border-color:rgba(0,212,255,.2)">' +
+          '<div id="cv-pre">'+(profile.cvIpfsHash?'<div style="font-size:.72rem;color:#10b981;font-family:\'JetBrains Mono\',monospace;margin-bottom:.3rem">📌 '+profile.cvIpfsHash.slice(0,30)+'…</div>':'<div style="font-size:.7rem;color:#4a5a6a;margin-bottom:.3rem">No file uploaded</div>')+'</div>' +
+          '<input type="file" id="cv-file-in" accept=".pdf,application/pdf" style="display:none" onchange="uploadCv(this)">' +
+          '<div id="cv-up-label" style="font-size:.72rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">📤 Click to upload PDF</div>' +
+        '</div>' +
+        (profile.cvIpfsHash?'<button onclick="removeCv()" class="abtn-del" style="margin-top:.5rem">× Remove CV</button>':'') +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:.6rem;margin:.2rem 0 .7rem"><div style="flex:1;height:1px;background:var(--border)"></div><span style="font-size:.65rem;color:var(--muted);font-family:\'JetBrains Mono\',monospace">OR</span><div style="flex:1;height:1px;background:var(--border)"></div></div>' +
+      '<div class="frow" style="margin-bottom:.7rem"><label class="flabel">Direct CV URL</label><input class="finput" id="lnk-cv-url" value="'+esc(profile.cvDirectUrl||'')+'" placeholder="https://drive.google.com/file/d/..."></div>' +
+      '<div class="frow"><label class="flabel">CV File Name</label><input class="finput" id="lnk-cv-name" value="'+esc(profile.cvFileName||'CV.pdf')+'" placeholder="YourName_CV.pdf"></div>' +
+    '</div>' +
+    '<div style="background:rgba(139,92,246,.03);border:1px solid rgba(139,92,246,.12);border-radius:10px;padding:1.1rem">' +
+      '<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem"><span style="font-size:1.15rem">🔗</span><span style="font-size:.82rem;font-weight:600;color:var(--purple)">Social Links</span></div>' +
+      '<div class="frow"><label class="flabel">GitHub Profile URL</label><input class="finput" id="lnk-github" value="'+esc(profile.githubUrl||'')+'" placeholder="https://github.com/yourusername"></div>' +
+      '<div class="frow"><label class="flabel">LinkedIn Profile URL</label><input class="finput" id="lnk-linkedin" value="'+esc(profile.linkedinUrl||'')+'" placeholder="https://linkedin.com/in/yourusername"></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:.75rem;justify-content:flex-end">' +
+      '<button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button>' +
+      '<button class="save-btn" onclick="saveLinksForm()">Save Links</button>' +
+    '</div>' +
+  '</div>';
 }
 
 async function saveLinksForm(){
@@ -385,9 +383,8 @@ async function saveLinksForm(){
   profile.cvDirectUrl=(document.getElementById('lnk-cv-url').value||'').trim();
   profile.cvFileName=(document.getElementById('lnk-cv-name').value||'CV.pdf').trim();
   applyProfileLinks();
-  activeSect='links';
-  openAdmin();
-  await persistAndToast('Links saved ✓');
+  await saveAndSync('Links saved ✓');
+  activeSect='links'; openAdmin();
 }
 
 function triggerCvUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);return;}document.getElementById('cv-file-in').click();}
@@ -396,15 +393,14 @@ async function uploadCv(inp){
   var file=inp.files[0];if(!file)return;
   var lbl=document.getElementById('cv-up-label');if(lbl)lbl.textContent='Uploading…';
   try{
-    var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:file.name||'CV.pdf'}));
-    var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});
+    var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:'sg-cv-'+Date.now()}));
+    var res=await fetch(PINATA_API+'/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});
     if(!res.ok)throw new Error(await res.text());
     var data=await res.json();
     profile.cvIpfsHash=data.IpfsHash;profile.cvFileName=file.name||'CV.pdf';profile.cvDirectUrl='';
     applyProfileLinks();
-    activeSect='links';
-    document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
-    await persistAndToast('CV uploaded to IPFS ✓');
+    await saveAndSync('CV uploaded & saved ✓');
+    activeSect='links';document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
   }catch(e){showToast('Upload failed: '+e.message,true);if(lbl)lbl.textContent='📤 Click to upload PDF';}
 }
 
@@ -412,14 +408,18 @@ async function removeCv(){
   if(!confirm('Remove CV?'))return;
   profile.cvIpfsHash='';
   applyProfileLinks();
+  await saveAndSync('CV removed');
   document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
-  await persistAndToast('CV removed');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  PROJECTS TAB
 // ═══════════════════════════════════════════════════════════════════════
-function buildProjectsTab(){var rows=projects.map(function(p){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+p.emoji+'</span><div style="flex:1;min-width:0"><div style="font-size:.82rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.title)+'</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:.6rem;color:var(--muted)">'+esc(p.num)+' · '+esc(p.cat)+'</div></div><button onclick="editProject(\''+p.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'projects\',\''+p.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addProject()" class="abtn-add">+ New Project</button>'+rows;}
+function buildProjectsTab(){
+  var rows=projects.map(function(p){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+p.emoji+'</span><div style="flex:1;min-width:0"><div style="font-size:.82rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.title)+'</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:.6rem;color:var(--muted)">'+esc(p.num)+' · '+esc(p.cat)+'</div></div><button onclick="editProject(\''+p.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'projects\',\''+p.id+'\')" class="abtn-del">Del</button></div>';}).join('');
+  return '<button onclick="addProject()" class="abtn-add">+ New Project</button>'+rows;
+}
+
 function addProject(){editingId=null;techTags=[];currentImgHash='';currentVideoHash='';showProjectForm({id:'new_'+Date.now(),num:'#'+String(projects.length+1).padStart(2,'0'),emoji:'🚀',title:'',desc:'',tech:[],cat:'web',github:'',videoHash:'',imageHash:''});}
 function editProject(id){var p=projects.find(function(x){return x.id===id;});if(!p)return;editingId=id;techTags=p.tech.slice();currentImgHash=p.imageHash||'';currentVideoHash=p.videoHash||'';showProjectForm(p);}
 
@@ -441,8 +441,9 @@ async function saveProjectForm(){
   if(!title){showToast('Title required',true);return;}
   var p={id:editingId||('p'+Date.now()),num:document.getElementById('f-num').value.trim(),emoji:document.getElementById('f-emoji').value,title:title,desc:document.getElementById('f-desc').value.trim(),tech:techTags.slice(),cat:document.getElementById('f-cat').value,github:document.getElementById('f-github').value.trim(),videoHash:currentVideoHash,imageHash:currentImgHash};
   if(editingId){projects=projects.map(function(x){return x.id===editingId?p:x;});}else{projects.push(p);}
-  renderProjects();activeSect='projects';openAdmin();
-  await persistAndToast('Project saved ✓');
+  renderProjects();
+  await saveAndSync('Project saved ✓');
+  activeSect='projects';openAdmin();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -452,14 +453,14 @@ function buildSkillsTab(){var rows=skills.map(function(sk){return '<div style="d
 function addSkill(){editingId=null;techTags=[];showSkillForm({id:'sk'+Date.now(),icon:'⚡',title:'',color:'var(--cyan)',theme:'sk-cyan',tags:[]});}
 function editSkill(id){var sk=skills.find(function(x){return x.id===id;});if(!sk)return;editingId=id;techTags=sk.tags.slice();showSkillForm(sk);}
 function showSkillForm(sk){cm('adm');var THEMES=['sk-cyan','sk-purple','sk-blue','sk-green','sk-orange'];var themeOpts=THEMES.map(function(t){return '<option value="'+t+'"'+(sk.theme===t?' selected':'')+'>'+t+'</option>';}).join('');modal('<div class="overlay" id="skfrm" onclick="oci(event,\'skfrm\')"><div class="mbox" style="max-width:460px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Skill Category':'New Skill Category')+'</div><div class="fgrid"><div><label class="flabel">Icon / Emoji</label><input class="finput" id="sk-icon" value="'+esc(sk.icon)+'" placeholder="⚡"></div><div><label class="flabel">Title</label><input class="finput" id="sk-title" value="'+esc(sk.title)+'" placeholder="Languages"></div></div><div class="frow"><label class="flabel">Theme</label><select class="finput" id="sk-theme">'+themeOpts+'</select></div><div class="frow"><label class="flabel">Technologies / Tags</label><div style="display:flex;gap:.5rem"><input class="finput" id="f-tech-in" placeholder="Add & press Enter" style="flex:1" onkeydown="if(event.key===\'Enter\'){event.preventDefault();addTag()}"><button onclick="addTag()" style="padding:.55rem .85rem;background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.25);border-radius:7px;color:var(--cyan);cursor:pointer">+</button></div><div id="tags-out" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem">'+techTags.map(tagEl).join('')+'</div></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveSkillForm()">'+(editingId?'Save Changes':'Add Category')+'</button></div></div></div>');}
-async function saveSkillForm(){var TC={'sk-cyan':'var(--cyan)','sk-purple':'var(--purple)','sk-blue':'var(--blue)','sk-green':'var(--green)','sk-orange':'#f97316'};var theme=document.getElementById('sk-theme').value;var sk={id:editingId||('sk'+Date.now()),icon:document.getElementById('sk-icon').value.trim()||'⚡',title:document.getElementById('sk-title').value.trim(),color:TC[theme]||'var(--cyan)',theme:theme,tags:techTags.slice()};if(!sk.title){showToast('Title required',true);return;}if(editingId){skills=skills.map(function(x){return x.id===editingId?sk:x;});}else{skills.push(sk);}renderSkills();activeSect='skills';openAdmin();await persistAndToast('Skills saved ✓');}
+async function saveSkillForm(){var TC={'sk-cyan':'var(--cyan)','sk-purple':'var(--purple)','sk-blue':'var(--blue)','sk-green':'var(--green)','sk-orange':'#f97316'};var theme=document.getElementById('sk-theme').value;var sk={id:editingId||('sk'+Date.now()),icon:document.getElementById('sk-icon').value.trim()||'⚡',title:document.getElementById('sk-title').value.trim(),color:TC[theme]||'var(--cyan)',theme:theme,tags:techTags.slice()};if(!sk.title){showToast('Title required',true);return;}if(editingId){skills=skills.map(function(x){return x.id===editingId?sk:x;});}else{skills.push(sk);}renderSkills();await saveAndSync('Skills saved ✓');activeSect='skills';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  STATS TAB
 // ═══════════════════════════════════════════════════════════════════════
 function buildStatsTab(){var rows=stats.map(function(s,i){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(s.label)+'</div><div style="font-size:.68rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">'+s.value+s.suffix+'</div></div><button onclick="editStat('+i+')" class="abtn-edit">Edit</button></div>';}).join('');return '<div style="font-size:.75rem;color:var(--muted);margin-bottom:1rem">Edit the three stat counters shown in the About section.</div>'+rows;}
 function editStat(idx){var s=stats[idx];cm('adm');modal('<div class="overlay" id="stfrm" onclick="oci(event,\'stfrm\')"><div class="mbox" style="max-width:380px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">Edit Stat: '+esc(s.label)+'</div><div class="frow"><label class="flabel">Label</label><input class="finput" id="st-label" value="'+esc(s.label)+'"></div><div class="fgrid"><div><label class="flabel">Value (number)</label><input class="finput" id="st-value" type="number" value="'+s.value+'"></div><div><label class="flabel">Suffix</label><input class="finput" id="st-suffix" value="'+esc(s.suffix)+'"></div></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveStatForm('+idx+')">Save</button></div></div></div>');}
-async function saveStatForm(idx){stats[idx].label=document.getElementById('st-label').value.trim();stats[idx].value=parseInt(document.getElementById('st-value').value)||0;stats[idx].suffix=document.getElementById('st-suffix').value;renderStats();activeSect='stats';openAdmin();await persistAndToast('Stat saved ✓');}
+async function saveStatForm(idx){stats[idx].label=document.getElementById('st-label').value.trim();stats[idx].value=parseInt(document.getElementById('st-value').value)||0;stats[idx].suffix=document.getElementById('st-suffix').value;renderStats();await saveAndSync('Stat saved ✓');activeSect='stats';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  EXPERIENCE TAB
@@ -468,7 +469,7 @@ function buildExperienceTab(){var rows=experience.map(function(e){return '<div s
 function addExp(){editingId=null;showExpForm({id:'e'+Date.now(),date:'',title:'',org:'',desc:''});}
 function editExp(id){var e=experience.find(function(x){return x.id===id;});if(!e)return;editingId=id;showExpForm(e);}
 function showExpForm(e){cm('adm');modal('<div class="overlay" id="efrm" onclick="oci(event,\'efrm\')"><div class="mbox" style="max-width:480px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Experience':'New Experience')+'</div><div class="frow"><label class="flabel">Job Title *</label><input class="finput" id="ex-title" value="'+esc(e.title)+'" placeholder="Software Engineer"></div><div class="frow"><label class="flabel">Organisation</label><input class="finput" id="ex-org" value="'+esc(e.org)+'" placeholder="Company Name"></div><div class="frow"><label class="flabel">Date Range</label><input class="finput" id="ex-date" value="'+esc(e.date)+'" placeholder="JAN 2023 — DEC 2023"></div><div class="frow"><label class="flabel">Description</label><textarea class="finput" id="ex-desc" style="resize:vertical;min-height:90px;line-height:1.65">'+esc(e.desc)+'</textarea></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveExpForm()">'+(editingId?'Save Changes':'Add Experience')+'</button></div></div></div>');}
-async function saveExpForm(){var title=document.getElementById('ex-title').value.trim();if(!title){showToast('Title required',true);return;}var e={id:editingId||('e'+Date.now()),date:document.getElementById('ex-date').value.trim(),title:title,org:document.getElementById('ex-org').value.trim(),desc:document.getElementById('ex-desc').value.trim()};if(editingId){experience=experience.map(function(x){return x.id===editingId?e:x;});}else{experience.push(e);}renderExperience();activeSect='experience';openAdmin();await persistAndToast('Experience saved ✓');}
+async function saveExpForm(){var title=document.getElementById('ex-title').value.trim();if(!title){showToast('Title required',true);return;}var e={id:editingId||('e'+Date.now()),date:document.getElementById('ex-date').value.trim(),title:title,org:document.getElementById('ex-org').value.trim(),desc:document.getElementById('ex-desc').value.trim()};if(editingId){experience=experience.map(function(x){return x.id===editingId?e:x;});}else{experience.push(e);}renderExperience();await saveAndSync('Experience saved ✓');activeSect='experience';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  EDUCATION TAB
@@ -478,7 +479,7 @@ function addEdu(){editingId=null;showEduForm({id:'ed'+Date.now(),deg:'',school:'
 function editEdu(id){var ed=education.find(function(x){return x.id===id;});if(!ed)return;editingId=id;showEduForm(ed);}
 function showEduForm(ed){cm('adm');var bcOpts=['cyan','purple','green','blue','orange'].map(function(c){return '<option value="'+c+'"'+(ed.badgeColor===c?' selected':'')+'>'+c+'</option>';}).join('');var emojis=['🎓','🏫','🏆','📜','🏅','⭐','🔬','💡','🖥','📚'];var emojiBtns=emojis.map(function(e){return '<button onclick="pickEduEmoji(\''+e+'\')" style="width:33px;height:33px;border:1px solid '+(ed.badgeEmoji===e?'var(--cyan)':'var(--border)')+';border-radius:5px;background:'+(ed.badgeEmoji===e?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)')+';font-size:1.1rem;cursor:pointer">'+e+'</button>';}).join('');modal('<div class="overlay" id="edfrm" onclick="oci(event,\'edfrm\')"><div class="mbox" style="max-width:480px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Education':'New Education')+'</div><div class="frow"><label class="flabel">Degree / Qualification *</label><input class="finput" id="ed-deg" value="'+esc(ed.deg)+'" placeholder="BSc Software Engineering"></div><div class="frow"><label class="flabel">Institution</label><input class="finput" id="ed-school" value="'+esc(ed.school)+'" placeholder="University Name"></div><div class="fgrid"><div><label class="flabel">Years</label><input class="finput" id="ed-year" value="'+esc(ed.year)+'" placeholder="2021 — 2025"></div><div><label class="flabel">Location</label><input class="finput" id="ed-location" value="'+esc(ed.location)+'" placeholder="Cardiff, Wales"></div></div><div class="frow"><label class="flabel">Badge Text</label><input class="finput" id="ed-badge" value="'+esc(ed.badge)+'" placeholder="Undergraduate Degree"></div><div class="frow"><label class="flabel">Logo URL (optional)</label><input class="finput" id="ed-logo" value="'+esc(ed.logoUrl)+'" placeholder="https://university.ac.uk/logo.png"></div><div class="fgrid"><div><label class="flabel">Badge Colour</label><select class="finput" id="ed-bc">'+bcOpts+'</select></div><div><label class="flabel">Accent (R,G,B)</label><input class="finput" id="ed-accent" value="'+esc(ed.accentColor)+'" placeholder="0,82,136"></div></div><div class="frow"><label class="flabel">Icon</label><div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.3rem" id="edu-epicker">'+emojiBtns+'</div><input type="hidden" id="ed-emoji" value="'+esc(ed.badgeEmoji)+'"></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveEduForm()">'+(editingId?'Save Changes':'Add Education')+'</button></div></div></div>');}
 function pickEduEmoji(e){document.getElementById('ed-emoji').value=e;document.querySelectorAll('#edu-epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
-async function saveEduForm(){var deg=document.getElementById('ed-deg').value.trim();if(!deg){showToast('Degree required',true);return;}var ed={id:editingId||('ed'+Date.now()),deg:deg,school:document.getElementById('ed-school').value.trim(),year:document.getElementById('ed-year').value.trim(),location:document.getElementById('ed-location').value.trim(),badge:document.getElementById('ed-badge').value.trim(),badgeEmoji:document.getElementById('ed-emoji').value,logoUrl:document.getElementById('ed-logo').value.trim(),accentColor:document.getElementById('ed-accent').value.trim()||'0,212,255',badgeColor:document.getElementById('ed-bc').value};if(editingId){education=education.map(function(x){return x.id===editingId?ed:x;});}else{education.push(ed);}renderEducation();activeSect='education';openAdmin();await persistAndToast('Education saved ✓');}
+async function saveEduForm(){var deg=document.getElementById('ed-deg').value.trim();if(!deg){showToast('Degree required',true);return;}var ed={id:editingId||('ed'+Date.now()),deg:deg,school:document.getElementById('ed-school').value.trim(),year:document.getElementById('ed-year').value.trim(),location:document.getElementById('ed-location').value.trim(),badge:document.getElementById('ed-badge').value.trim(),badgeEmoji:document.getElementById('ed-emoji').value,logoUrl:document.getElementById('ed-logo').value.trim(),accentColor:document.getElementById('ed-accent').value.trim()||'0,212,255',badgeColor:document.getElementById('ed-bc').value};if(editingId){education=education.map(function(x){return x.id===editingId?ed:x;});}else{education.push(ed);}renderEducation();await saveAndSync('Education saved ✓');activeSect='education';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  CONTACT TAB
@@ -488,7 +489,7 @@ function addContact(){editingId=null;showContactForm({id:'c'+Date.now(),icon:'�
 function editContact(id){var c=contact.find(function(x){return x.id===id;});if(!c)return;editingId=id;showContactForm(c);}
 function showContactForm(c){cm('adm');var icons=['✉','⌥','💼','🐙','🐦','📱','🌐','📞','💬'];var iconBtns=icons.map(function(i){return '<button onclick="pickContactIcon(\''+i+'\')" style="width:33px;height:33px;border:1px solid '+(c.icon===i?'var(--cyan)':'var(--border)')+';border-radius:5px;background:'+(c.icon===i?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)')+';font-size:1.1rem;cursor:pointer">'+i+'</button>';}).join('');modal('<div class="overlay" id="cfrm" onclick="oci(event,\'cfrm\')"><div class="mbox" style="max-width:420px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Contact':'New Contact')+'</div><div class="frow"><label class="flabel">Icon</label><div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.3rem" id="contact-ipicker">'+iconBtns+'</div><input type="hidden" id="c-icon" value="'+esc(c.icon)+'"></div><div class="fgrid"><div><label class="flabel">Label</label><input class="finput" id="c-label" value="'+esc(c.label)+'" placeholder="Email"></div><div><label class="flabel">Display Value</label><input class="finput" id="c-value" value="'+esc(c.value)+'" placeholder="you@email.com"></div></div><div class="frow"><label class="flabel">Link / href</label><input class="finput" id="c-href" value="'+esc(c.href)+'" placeholder="mailto:you@email.com"></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveContactForm()">'+(editingId?'Save Changes':'Add Contact')+'</button></div></div></div>');}
 function pickContactIcon(i){document.getElementById('c-icon').value=i;document.querySelectorAll('#contact-ipicker button').forEach(function(b){var s=b.textContent===i;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
-async function saveContactForm(){var label=document.getElementById('c-label').value.trim();if(!label){showToast('Label required',true);return;}var c={id:editingId||('c'+Date.now()),icon:document.getElementById('c-icon').value,label:label,value:document.getElementById('c-value').value.trim(),href:document.getElementById('c-href').value.trim()};if(editingId){contact=contact.map(function(x){return x.id===editingId?c:x;});}else{contact.push(c);}renderContact();activeSect='contact';openAdmin();await persistAndToast('Contact saved ✓');}
+async function saveContactForm(){var label=document.getElementById('c-label').value.trim();if(!label){showToast('Label required',true);return;}var c={id:editingId||('c'+Date.now()),icon:document.getElementById('c-icon').value,label:label,value:document.getElementById('c-value').value.trim(),href:document.getElementById('c-href').value.trim()};if(editingId){contact=contact.map(function(x){return x.id===editingId?c:x;});}else{contact.push(c);}renderContact();await saveAndSync('Contact saved ✓');activeSect='contact';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  DELETE
@@ -502,39 +503,46 @@ async function deleteItem(type,id){
   else if(type==='experience'){experience=map[type];renderExperience();}
   else if(type==='education'){education=map[type];renderEducation();}
   else if(type==='contact'){contact=map[type];renderContact();}
+  await saveAndSync('Removed ✓');
   activeSect=type;openAdmin();
-  await persistAndToast('Removed ✓');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PINATA MODAL
-// ═══════════════════════════════════════════════════════════════════════
-function openPinataModal(){if(!adminUnlocked)return;modal('<div class="overlay" id="pin" onclick="oci(event,\'pin\')"><div class="mbox" style="max-width:420px"><button class="mclose" onclick="cm(\'pin\')">&#10005;</button><div style="font-size:1.8rem;margin-bottom:.6rem">&#128204;</div><div style="font-weight:600;color:#e6008a;margin-bottom:.5rem">Pinata Configuration</div><div style="font-size:.78rem;color:var(--muted);line-height:1.75;margin-bottom:1.3rem">Paste your Pinata JWT to enable IPFS uploads.<br>Get it from <span style="color:#e6008a">app.pinata.cloud → API Keys</span>.</div><div class="frow"><label class="flabel">JWT Token</label><textarea class="finput" id="jwt-in" style="min-height:80px;font-size:.7rem;word-break:break-all;resize:vertical" placeholder="eyJhbGci...">'+pinataJWT+'</textarea></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1rem"><button onclick="cm(\'pin\')" style="padding:.6rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button onclick="saveJWT()" style="padding:.6rem 1.5rem;background:#e6008a;border:none;border-radius:6px;color:#fff;font-size:.78rem;font-weight:700;cursor:pointer">Save</button></div></div></div>');}
-
-async function saveJWT(){
-  var v = document.getElementById('jwt-in').value.trim();
-  pinataJWT = v;
-  updatePinataLabel();
-  cm('pin');
-  // Store JWT in Firebase directly — completely independent of IPFS
-  if (_db) {
-    await _db.ref(JWT_FB_KEY).set(v);
-    showToast(v ? 'Pinata JWT saved ✓' : 'JWT cleared');
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  UPLOAD HELPERS
+//  UPLOAD HELPERS — images & videos go directly to Pinata IPFS
 // ═══════════════════════════════════════════════════════════════════════
 function pickE(e){document.getElementById('f-emoji').value=e;document.querySelectorAll('#epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
 function tagEl(t){return '<span style="padding:.2rem .6rem;background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.2);border-radius:5px;font-size:.7rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace;display:inline-flex;align-items:center;gap:.3rem">'+esc(t)+'<span onclick="rmTag(\''+esc(t)+'\')" style="cursor:pointer;color:#f87171">&#215;</span></span>';}
 function addTag(){var inp=document.getElementById('f-tech-in');var val=inp.value.trim();if(val&&!techTags.includes(val)){techTags.push(val);document.getElementById('tags-out').innerHTML=techTags.map(tagEl).join('');}inp.value='';}
 function rmTag(t){techTags=techTags.filter(function(x){return x!==t;});document.getElementById('tags-out').innerHTML=techTags.map(tagEl).join('');}
+
 function triggerUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);return;}document.getElementById('img-in').click();}
-async function uploadImg(inp){var file=inp.files[0];if(!file)return;document.getElementById('up-label').textContent='Uploading...';try{var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:document.getElementById('f-title').value||'img'}));var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});if(!res.ok)throw new Error(await res.text());var data=await res.json();currentImgHash=data.IpfsHash;document.getElementById('img-pre').innerHTML='<img src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem" alt="preview">';document.getElementById('up-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Uploaded to IPFS');}catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('up-label').textContent='📤 Click to upload';}}
+async function uploadImg(inp){
+  var file=inp.files[0];if(!file)return;
+  document.getElementById('up-label').textContent='Uploading...';
+  try{
+    var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:'sg-img-'+Date.now()}));
+    var res=await fetch(PINATA_API+'/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});
+    if(!res.ok)throw new Error(await res.text());
+    var data=await res.json();currentImgHash=data.IpfsHash;
+    document.getElementById('img-pre').innerHTML='<img src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem" alt="preview">';
+    document.getElementById('up-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Image uploaded to IPFS ✓');
+  }catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('up-label').textContent='📤 Click to upload';}
+}
 function removeImg(){currentImgHash='';var pre=document.getElementById('img-pre');if(pre)pre.innerHTML='<div style="font-size:.7rem;color:#4a3a5a;margin-bottom:.4rem">No image</div>';var lbl=document.getElementById('up-label');if(lbl)lbl.textContent='📤 Click to upload image';}
+
 function triggerVideoUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);return;}document.getElementById('vid-in').click();}
-async function uploadVideo(inp){var file=inp.files[0];if(!file)return;document.getElementById('vid-label').textContent='Uploading...';try{var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:(document.getElementById('f-title').value||'video')+'-demo'}));var res=await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});if(!res.ok)throw new Error(await res.text());var data=await res.json();currentVideoHash=data.IpfsHash;document.getElementById('vid-pre').innerHTML='<video src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem;max-width:100%" muted playsinline></video>';document.getElementById('vid-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Video uploaded to IPFS');}catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('vid-label').textContent='🎬 Click to upload video';}}
+async function uploadVideo(inp){
+  var file=inp.files[0];if(!file)return;
+  document.getElementById('vid-label').textContent='Uploading...';
+  try{
+    var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:'sg-vid-'+Date.now()}));
+    var res=await fetch(PINATA_API+'/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});
+    if(!res.ok)throw new Error(await res.text());
+    var data=await res.json();currentVideoHash=data.IpfsHash;
+    document.getElementById('vid-pre').innerHTML='<video src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem;max-width:100%" muted playsinline></video>';
+    document.getElementById('vid-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Video uploaded to IPFS ✓');
+  }catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('vid-label').textContent='🎬 Click to upload video';}
+}
 function removeVideo(){currentVideoHash='';var pre=document.getElementById('vid-pre');if(pre)pre.innerHTML='<div style="font-size:.7rem;color:#3a2a5a;margin-bottom:.4rem">No video</div>';var lbl=document.getElementById('vid-label');if(lbl)lbl.textContent='🎬 Click to upload video';}
 
 // ═══════════════════════════════════════════════════════════════════════
