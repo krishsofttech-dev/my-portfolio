@@ -9,7 +9,9 @@
   appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
 };
 
-
+// ═══════════════════════════════════════════════════════════════════════
+//  LOAD FIREBASE SDKs — App + Auth + Realtime DB (only stores one hash)
+// ═══════════════════════════════════════════════════════════════════════
 (function loadFirebase() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
@@ -50,23 +52,33 @@ const PINATA_GATEWAY  = 'https://gateway.pinata.cloud/ipfs/';
 const PINATA_PIN_URL  = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
 const PINATA_UNPIN_URL= 'https://api.pinata.cloud/pinning/unpin/';
 const DATA_FILE_NAME  = 'portfolio-data.json';   // name used when pinning
-const HASH_FB_KEY     = 'dataHash';              // key stored in Firebase
+const HASH_FB_KEY     = 'dataHash';    // IPFS hash pointer stored in Firebase
+const JWT_FB_KEY      = 'pinataJWT';   // JWT stored in Firebase (NOT in IPFS)
 
 // ═══════════════════════════════════════════════════════════════════════
-//  LOAD — read hash from Firebase → fetch full JSON from IPFS
+//  LOAD — reads BOTH hash and JWT from Firebase first, then fetches
+//  full site data from IPFS using that hash
 // ═══════════════════════════════════════════════════════════════════════
 function loadAllFromIPFS() {
   if (!_db) { renderDefaults(); return; }
 
-  _db.ref(HASH_FB_KEY).get()
+  // Read both the data hash AND the JWT from Firebase in one call
+  _db.ref('/').get()
     .then(function(snapshot) {
-      var hash = snapshot.exists() ? snapshot.val() : null;
+      var root = snapshot.exists() ? snapshot.val() : {};
+
+      // Always restore JWT from Firebase first — this is critical
+      pinataJWT = root[JWT_FB_KEY] || '';
+      updatePinataLabel();
+
+      var hash = root[HASH_FB_KEY] || null;
       if (!hash) {
-        // No data saved yet — use defaults and render
+        // No data saved yet — show defaults
         renderDefaults();
         return;
       }
-      // Fetch the JSON data file from IPFS
+
+      // Fetch the full site data JSON from IPFS
       return fetch(PINATA_GATEWAY + hash)
         .then(function(res) {
           if (!res.ok) throw new Error('IPFS fetch failed: ' + res.status);
@@ -82,7 +94,7 @@ function loadAllFromIPFS() {
     });
 }
 
-// Apply loaded data to global state and render everything
+// Apply loaded IPFS data to global state and re-render everything
 function applyData(data) {
   stats      = data.stats      || DEFAULT_STATS;
   skills     = data.skills     || DEFAULT_SKILLS;
@@ -91,7 +103,7 @@ function applyData(data) {
   education  = data.education  || DEFAULT_EDUCATION;
   contact    = data.contact    || DEFAULT_CONTACT;
   profile    = data.profile    || Object.assign({}, DEFAULT_PROFILE);
-  pinataJWT  = data.pinataJWT  || '';
+  // NOTE: pinataJWT is NOT read from IPFS data — it comes from Firebase only
 
   updatePinataLabel();
   renderStats(); renderSkills(); renderProjects();
@@ -125,17 +137,16 @@ async function saveAllToIPFS() {
     return;
   }
 
-  // Bundle entire site state into one JSON object
+  // Bundle site state — deliberately exclude pinataJWT (stored in Firebase only)
   var payload = {
     stats, skills, projects, experience,
-    education, contact, profile, pinataJWT
+    education, contact, profile
   };
 
   var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   var fd   = new FormData();
   fd.append('file', blob, DATA_FILE_NAME);
   fd.append('pinataMetadata', JSON.stringify({ name: DATA_FILE_NAME }));
-  // pinataOptions keyvalues can help you identify this file later
   fd.append('pinataOptions', JSON.stringify({ cidVersion: 1 }));
 
   try {
@@ -146,23 +157,24 @@ async function saveAllToIPFS() {
     });
     if (!res.ok) throw new Error(await res.text());
 
-    var data     = await res.json();
-    var newHash  = data.IpfsHash;
+    var data    = await res.json();
+    var newHash = data.IpfsHash;
 
-    // Optionally unpin the old hash to keep your Pinata storage clean
+    // Get old hash so we can unpin it after saving the new one
     var oldSnap = await _db.ref(HASH_FB_KEY).get();
-    if (oldSnap.exists()) {
-      var oldHash = oldSnap.val();
-      if (oldHash && oldHash !== newHash) {
-        fetch(PINATA_UNPIN_URL + oldHash, {
-          method: 'DELETE',
-          headers: { Authorization: 'Bearer ' + pinataJWT }
-        }).catch(function() {}); // silent — not critical
-      }
+    var oldHash = oldSnap.exists() ? oldSnap.val() : null;
+
+    // Write new hash to Firebase
+    await _db.ref(HASH_FB_KEY).set(newHash);
+
+    // Unpin the old hash (silent — not critical if it fails)
+    if (oldHash && oldHash !== newHash) {
+      fetch(PINATA_UNPIN_URL + oldHash, {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + pinataJWT }
+      }).catch(function() {});
     }
 
-    // Store only the new hash in Firebase (tiny write)
-    await _db.ref(HASH_FB_KEY).set(newHash);
     return newHash;
 
   } catch (e) {
@@ -500,12 +512,15 @@ async function deleteItem(type,id){
 function openPinataModal(){if(!adminUnlocked)return;modal('<div class="overlay" id="pin" onclick="oci(event,\'pin\')"><div class="mbox" style="max-width:420px"><button class="mclose" onclick="cm(\'pin\')">&#10005;</button><div style="font-size:1.8rem;margin-bottom:.6rem">&#128204;</div><div style="font-weight:600;color:#e6008a;margin-bottom:.5rem">Pinata Configuration</div><div style="font-size:.78rem;color:var(--muted);line-height:1.75;margin-bottom:1.3rem">Paste your Pinata JWT to enable IPFS uploads.<br>Get it from <span style="color:#e6008a">app.pinata.cloud → API Keys</span>.</div><div class="frow"><label class="flabel">JWT Token</label><textarea class="finput" id="jwt-in" style="min-height:80px;font-size:.7rem;word-break:break-all;resize:vertical" placeholder="eyJhbGci...">'+pinataJWT+'</textarea></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1rem"><button onclick="cm(\'pin\')" style="padding:.6rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button onclick="saveJWT()" style="padding:.6rem 1.5rem;background:#e6008a;border:none;border-radius:6px;color:#fff;font-size:.78rem;font-weight:700;cursor:pointer">Save</button></div></div></div>');}
 
 async function saveJWT(){
-  var v=document.getElementById('jwt-in').value.trim();
-  pinataJWT=v;
+  var v = document.getElementById('jwt-in').value.trim();
+  pinataJWT = v;
   updatePinataLabel();
   cm('pin');
-  // Persist the JWT change to IPFS/Firebase immediately
-  await persistAndToast(v?'Pinata JWT saved ✓':'JWT cleared');
+  // Store JWT in Firebase directly — completely independent of IPFS
+  if (_db) {
+    await _db.ref(JWT_FB_KEY).set(v);
+    showToast(v ? 'Pinata JWT saved ✓' : 'JWT cleared');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
