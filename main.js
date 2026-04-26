@@ -25,7 +25,6 @@
   });
 })();
 
-// ── CHANGE 2: Initialize DB + call loadSiteData here ─────────────────
 function onFirebaseReady() {
   firebase.initializeApp(firebaseConfig);
   var auth = firebase.auth();
@@ -35,13 +34,12 @@ function onFirebaseReady() {
   auth.onAuthStateChanged(function(user) {
     if (user) { unlockAdmin(); } else { lockAdmin(); }
   });
-  // Load site data now that Firebase DB is ready
+
   loadSiteData();
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  PINATA — All site data stored on IPFS
-// ═══════════════════════════════════════════════════════════════════════
+
 const PINATA_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
 const PINATA_API     = 'https://api.pinata.cloud';
 const DATA_FILE_NAME = 'sg-site-data';
@@ -49,11 +47,10 @@ const DATA_FILE_NAME = 'sg-site-data';
 let pinataJWT   = localStorage.getItem('sg_pinata_jwt')   || '';
 let latestHash  = localStorage.getItem('sg_latest_hash')  || '';
 
-// ── CHANGE 4: loadSiteData now reads hash from Firebase first ─────────
+
 async function loadSiteData() {
   showPageLoader(true);
   try {
-    // Always ask Firebase for the canonical latest hash first
     var firebaseHash = await getHashFromFirebase();
     if (firebaseHash) {
       latestHash = firebaseHash;
@@ -61,7 +58,7 @@ async function loadSiteData() {
     }
 
     if (latestHash) {
-      // Cache-bust so IPFS gateways don't serve stale content
+
       var res = await fetch(PINATA_GATEWAY + latestHash + '?t=' + Date.now());
       if (!res.ok) throw new Error('IPFS fetch failed');
       applyData(await res.json());
@@ -69,7 +66,7 @@ async function loadSiteData() {
       return;
     }
 
-    // Last resort: admin device with JWT — search Pinata pin list
+   
     if (pinataJWT) {
       var listRes = await fetch(
         PINATA_API + '/data/pinList?status=pinned&metadata[name]=' + DATA_FILE_NAME + '&pageLimit=1',
@@ -97,7 +94,6 @@ async function loadSiteData() {
   showPageLoader(false);
 }
 
-// ── CHANGE 5: saveSiteData now pushes hash to Firebase after saving ───
 async function saveSiteData() {
   if (!pinataJWT) { showToast('Set Pinata JWT first', true); return false; }
 
@@ -132,7 +128,7 @@ async function saveSiteData() {
     latestHash = uploaded.IpfsHash;
     localStorage.setItem('sg_latest_hash', latestHash);
 
-    // Push new hash to Firebase — all other devices will pick this up
+   
     await pushHashToFirebase(latestHash);
 
     console.log('Saved to IPFS & synced to Firebase:', latestHash);
@@ -150,7 +146,7 @@ async function saveAndSync(msg) {
   if (ok) showToast(msg || 'Saved ✓');
 }
 
-// ── CHANGE 6: Firebase helper functions ──────────────────────────────
+
 async function pushHashToFirebase(hash) {
   try {
     if (!window._fbDb) return;
@@ -171,7 +167,7 @@ async function getHashFromFirebase() {
   }
 }
 
-// ── Apply data to global vars and render everything ───────────────────
+// ── Apply data to global vars and render everything ───
 function applyData(data) {
   stats      = data.stats      || [];
   skills     = data.skills     || [];
@@ -234,9 +230,9 @@ function applyProfileLinks() {
   });
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  FIREBASE AUTH
-// ═══════════════════════════════════════════════════════════════════════
+
+//  FIREBASE 
+
 function unlockAdmin() {
   adminUnlocked=true;
   var fab=document.getElementById('admin-fab'), pill=document.getElementById('pinata-pill');
@@ -302,9 +298,7 @@ function signOut(){if(!window._fbAuth)return;window._fbAuth.signOut().then(funct
 
 function friendlyAuthError(c){return({'auth/invalid-email':'Invalid email address.','auth/user-not-found':'No account found.','auth/wrong-password':'Incorrect password.','auth/invalid-credential':'Incorrect email or password.','auth/too-many-requests':'Too many attempts. Try again later.','auth/network-request-failed':'Network error.','auth/popup-closed-by-user':'Popup closed.','auth/unauthorized-domain':'Domain not authorised in Firebase.'}[c]||'Sign-in failed ('+c+').');}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL
-// ═══════════════════════════════════════════════════════════════════════
 function updatePinataLabel(){
   var el=document.getElementById('pinata-pill');
   if(el) el.textContent = pinataJWT ? '📌 PINATA ✓' : '📌 PINATA —';
@@ -329,9 +323,7 @@ function openAdmin(){
 function switchAdminTab(key){activeSect=key;document.querySelectorAll('[id^="atab-"]').forEach(function(b){var k=b.id.replace('atab-','');b.style.border=k===key?'1px solid rgba(0,212,255,.5)':'1px solid var(--border)';b.style.background=k===key?'rgba(0,212,255,.1)':'transparent';b.style.color=k===key?'var(--cyan)':'var(--muted)';});document.getElementById('admin-tab-content').innerHTML=getTabContent(key);}
 function getTabContent(key){switch(key){case'projects':return buildProjectsTab();case'skills':return buildSkillsTab();case'stats':return buildStatsTab();case'experience':return buildExperienceTab();case'education':return buildEducationTab();case'contact':return buildContactTab();case'links':return buildLinksTab();default:return'';}}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  PINATA JWT MODAL
-// ═══════════════════════════════════════════════════════════════════════
 function openPinataModal(){
   if(!adminUnlocked)return;
   var hashInfo = latestHash
@@ -375,9 +367,7 @@ function clearJWT(){
   showToast('JWT and hash cleared');
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  LINKS TAB
-// ═══════════════════════════════════════════════════════════════════════
 function buildLinksTab(){
   var cvStatus=profile.cvIpfsHash
     ?'<span style="color:#10b981;font-size:.72rem;font-family:\'JetBrains Mono\',monospace">✓ IPFS: '+profile.cvIpfsHash.slice(0,24)+'…</span>'
@@ -451,9 +441,8 @@ async function removeCv(){
   document.getElementById('admin-tab-content').innerHTML=buildLinksTab();
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  PROJECTS TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildProjectsTab(){
   var rows=projects.map(function(p){
     return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem">' +
@@ -507,37 +496,32 @@ async function saveProjectForm(){
   await saveAndSync('Project saved to IPFS ✓');
   activeSect='projects';openAdmin();
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 //  SKILLS TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildSkillsTab(){var rows=skills.map(function(sk){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+sk.icon+'</span><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(sk.title)+'</div><div style="font-size:.68rem;color:var(--muted);margin-top:.15rem">'+sk.tags.join(', ')+'</div></div><button onclick="editSkill(\''+sk.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'skills\',\''+sk.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addSkill()" class="abtn-add">+ New Skill Category</button>'+rows;}
 function addSkill(){editingId=null;techTags=[];showSkillForm({id:'sk'+Date.now(),icon:'⚡',title:'',color:'var(--cyan)',theme:'sk-cyan',tags:[]});}
 function editSkill(id){var sk=skills.find(function(x){return x.id===id;});if(!sk)return;editingId=id;techTags=sk.tags.slice();showSkillForm(sk);}
 function showSkillForm(sk){cm('adm');var THEMES=['sk-cyan','sk-purple','sk-blue','sk-green','sk-orange'];var themeOpts=THEMES.map(function(t){return '<option value="'+t+'"'+(sk.theme===t?' selected':'')+'>'+t+'</option>';}).join('');modal('<div class="overlay" id="skfrm" onclick="oci(event,\'skfrm\')"><div class="mbox" style="max-width:460px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Skill Category':'New Skill Category')+'</div><div class="fgrid"><div><label class="flabel">Icon / Emoji</label><input class="finput" id="sk-icon" value="'+esc(sk.icon)+'" placeholder="⚡"></div><div><label class="flabel">Title</label><input class="finput" id="sk-title" value="'+esc(sk.title)+'" placeholder="Languages"></div></div><div class="frow"><label class="flabel">Theme</label><select class="finput" id="sk-theme">'+themeOpts+'</select></div><div class="frow"><label class="flabel">Technologies / Tags</label><div style="display:flex;gap:.5rem"><input class="finput" id="f-tech-in" placeholder="Add & press Enter" style="flex:1" onkeydown="if(event.key===\'Enter\'){event.preventDefault();addTag()}"><button onclick="addTag()" style="padding:.55rem .85rem;background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.25);border-radius:7px;color:var(--cyan);cursor:pointer">+</button></div><div id="tags-out" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem">'+techTags.map(tagEl).join('')+'</div></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveSkillForm()">'+(editingId?'Save Changes':'Add Category')+'</button></div></div></div>');}
 async function saveSkillForm(){var TC={'sk-cyan':'var(--cyan)','sk-purple':'var(--purple)','sk-blue':'var(--blue)','sk-green':'var(--green)','sk-orange':'#f97316'};var theme=document.getElementById('sk-theme').value;var sk={id:editingId||('sk'+Date.now()),icon:document.getElementById('sk-icon').value.trim()||'⚡',title:document.getElementById('sk-title').value.trim(),color:TC[theme]||'var(--cyan)',theme:theme,tags:techTags.slice()};if(!sk.title){showToast('Title required',true);return;}if(editingId){skills=skills.map(function(x){return x.id===editingId?sk:x;});}else{skills.push(sk);}renderSkills();await saveAndSync('Skills saved to IPFS ✓');activeSect='skills';openAdmin();}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  STATS TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildStatsTab(){var rows=stats.map(function(s,i){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(s.label)+'</div><div style="font-size:.68rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">'+s.value+s.suffix+'</div></div><button onclick="editStat('+i+')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'stats\',\''+s.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addStat()" class="abtn-add">+ New Stat</button><div style="font-size:.75rem;color:var(--muted);margin-bottom:.8rem">Counters shown in the About section.</div>'+rows;}
 function addStat(){editingId=null;showStatForm({id:'stat'+Date.now(),value:0,suffix:'+',label:'New Stat'});}
 function editStat(idx){showStatForm(stats[idx],idx);}
 function showStatForm(s,idx){cm('adm');modal('<div class="overlay" id="stfrm" onclick="oci(event,\'stfrm\')"><div class="mbox" style="max-width:380px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(idx!==undefined?'Edit Stat':'New Stat')+'</div><div class="frow"><label class="flabel">Label</label><input class="finput" id="st-label" value="'+esc(s.label||'')+'"></div><div class="fgrid"><div><label class="flabel">Value (number)</label><input class="finput" id="st-value" type="number" value="'+(s.value||0)+'"></div><div><label class="flabel">Suffix (e.g. + or mo)</label><input class="finput" id="st-suffix" value="'+esc(s.suffix||'+')+'"></div></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveStatForm('+(idx!==undefined?idx:'null')+',\''+s.id+'\')">Save</button></div></div></div>');}
 async function saveStatForm(idx,id){var label=document.getElementById('st-label').value.trim();var val=parseInt(document.getElementById('st-value').value)||0;var suf=document.getElementById('st-suffix').value;if(idx!==null&&idx!==undefined&&idx!=='null'){stats[idx]={id:stats[idx].id,value:val,suffix:suf,label:label};}else{stats.push({id:id||('stat'+Date.now()),value:val,suffix:suf,label:label});}renderStats();await saveAndSync('Stat saved to IPFS ✓');activeSect='stats';openAdmin();}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  EXPERIENCE TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildExperienceTab(){var rows=experience.map(function(e){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(e.title)+'</div><div style="font-size:.68rem;color:var(--muted)">'+esc(e.org)+' · '+esc(e.date)+'</div></div><button onclick="editExp(\''+e.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'experience\',\''+e.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addExp()" class="abtn-add">+ New Experience</button>'+rows;}
 function addExp(){editingId=null;showExpForm({id:'e'+Date.now(),date:'',title:'',org:'',desc:''});}
 function editExp(id){var e=experience.find(function(x){return x.id===id;});if(!e)return;editingId=id;showExpForm(e);}
 function showExpForm(e){cm('adm');modal('<div class="overlay" id="efrm" onclick="oci(event,\'efrm\')"><div class="mbox" style="max-width:480px"><button class="mclose" onclick="openAdmin()">&#10005;</button><div style="font-size:.78rem;font-weight:600;color:var(--cyan);margin-bottom:1.2rem">'+(editingId?'Edit Experience':'New Experience')+'</div><div class="frow"><label class="flabel">Job Title *</label><input class="finput" id="ex-title" value="'+esc(e.title)+'" placeholder="Software Engineer"></div><div class="frow"><label class="flabel">Organisation</label><input class="finput" id="ex-org" value="'+esc(e.org)+'" placeholder="Company Name"></div><div class="frow"><label class="flabel">Date Range</label><input class="finput" id="ex-date" value="'+esc(e.date)+'" placeholder="JAN 2023 — DEC 2023"></div><div class="frow"><label class="flabel">Description</label><textarea class="finput" id="ex-desc" style="resize:vertical;min-height:90px;line-height:1.65">'+esc(e.desc)+'</textarea></div><div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.2rem"><button onclick="openAdmin()" style="padding:.65rem 1.3rem;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:.78rem;cursor:pointer">Cancel</button><button class="save-btn" onclick="saveExpForm()">'+(editingId?'Save Changes':'Add Experience')+'</button></div></div></div>');}
 async function saveExpForm(){var title=document.getElementById('ex-title').value.trim();if(!title){showToast('Title required',true);return;}var e={id:editingId||('e'+Date.now()),date:document.getElementById('ex-date').value.trim(),title:title,org:document.getElementById('ex-org').value.trim(),desc:document.getElementById('ex-desc').value.trim()};if(editingId){experience=experience.map(function(x){return x.id===editingId?e:x;});}else{experience.push(e);}renderExperience();await saveAndSync('Experience saved to IPFS ✓');activeSect='experience';openAdmin();}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  EDUCATION TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildEducationTab(){var rows=education.map(function(ed){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+ed.badgeEmoji+'</span><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(ed.deg)+'</div><div style="font-size:.68rem;color:var(--muted)">'+esc(ed.school)+' · '+esc(ed.year)+'</div></div><button onclick="editEdu(\''+ed.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'education\',\''+ed.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addEdu()" class="abtn-add">+ New Education</button>'+rows;}
 function addEdu(){editingId=null;showEduForm({id:'ed'+Date.now(),deg:'',school:'',year:'',location:'',badge:'',badgeEmoji:'🎓',logoUrl:'',accentColor:'0,212,255',badgeColor:'cyan'});}
 function editEdu(id){var ed=education.find(function(x){return x.id===id;});if(!ed)return;editingId=id;showEduForm(ed);}
@@ -545,9 +529,8 @@ function showEduForm(ed){cm('adm');var bcOpts=['cyan','purple','green','blue','o
 function pickEduEmoji(e){document.getElementById('ed-emoji').value=e;document.querySelectorAll('#edu-epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
 async function saveEduForm(){var deg=document.getElementById('ed-deg').value.trim();if(!deg){showToast('Degree required',true);return;}var ed={id:editingId||('ed'+Date.now()),deg:deg,school:document.getElementById('ed-school').value.trim(),year:document.getElementById('ed-year').value.trim(),location:document.getElementById('ed-location').value.trim(),badge:document.getElementById('ed-badge').value.trim(),badgeEmoji:document.getElementById('ed-emoji').value,logoUrl:document.getElementById('ed-logo').value.trim(),accentColor:document.getElementById('ed-accent').value.trim()||'0,212,255',badgeColor:document.getElementById('ed-bc').value};if(editingId){education=education.map(function(x){return x.id===editingId?ed:x;});}else{education.push(ed);}renderEducation();await saveAndSync('Education saved to IPFS ✓');activeSect='education';openAdmin();}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  CONTACT TAB
-// ═══════════════════════════════════════════════════════════════════════
+
 function buildContactTab(){var rows=contact.map(function(c){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+c.icon+'</span><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(c.label)+'</div><div style="font-size:.68rem;color:var(--muted)">'+esc(c.value)+'</div></div><button onclick="editContact(\''+c.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'contact\',\''+c.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addContact()" class="abtn-add">+ New Contact</button>'+rows;}
 function addContact(){editingId=null;showContactForm({id:'c'+Date.now(),icon:'📧',label:'',value:'',href:''});}
 function editContact(id){var c=contact.find(function(x){return x.id===id;});if(!c)return;editingId=id;showContactForm(c);}
@@ -555,9 +538,7 @@ function showContactForm(c){cm('adm');var icons=['✉','⌥','💼','🐙','🐦
 function pickContactIcon(i){document.getElementById('c-icon').value=i;document.querySelectorAll('#contact-ipicker button').forEach(function(b){var s=b.textContent===i;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
 async function saveContactForm(){var label=document.getElementById('c-label').value.trim();if(!label){showToast('Label required',true);return;}var c={id:editingId||('c'+Date.now()),icon:document.getElementById('c-icon').value,label:label,value:document.getElementById('c-value').value.trim(),href:document.getElementById('c-href').value.trim()};if(editingId){contact=contact.map(function(x){return x.id===editingId?c:x;});}else{contact.push(c);}renderContact();await saveAndSync('Contact saved to IPFS ✓');activeSect='contact';openAdmin();}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  DELETE
-// ═══════════════════════════════════════════════════════════════════════
 async function deleteItem(type,id){
   if(!confirm('Remove this item?'))return;
   if(type==='projects'){projects=projects.filter(function(x){return x.id!==id;});renderProjects();}
@@ -569,10 +550,8 @@ async function deleteItem(type,id){
   await saveAndSync('Removed & saved to IPFS ✓');
   activeSect=type;openAdmin();
 }
-
-// ═══════════════════════════════════════════════════════════════════════
 //  UPLOAD HELPERS
-// ═══════════════════════════════════════════════════════════════════════
+
 function pickE(e){document.getElementById('f-emoji').value=e;document.querySelectorAll('#epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
 function tagEl(t){return '<span style="padding:.2rem .6rem;background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.2);border-radius:5px;font-size:.7rem;color:var(--cyan);font-family:\'JetBrains Mono\',monospace;display:inline-flex;align-items:center;gap:.3rem">'+esc(t)+'<span onclick="rmTag(\''+esc(t)+'\')" style="cursor:pointer;color:#f87171">&#215;</span></span>';}
 function addTag(){var inp=document.getElementById('f-tech-in');var val=inp.value.trim();if(val&&!techTags.includes(val)){techTags.push(val);document.getElementById('tags-out').innerHTML=techTags.map(tagEl).join('');}inp.value='';}
@@ -586,9 +565,8 @@ function triggerVideoUp(){if(!pinataJWT){showToast('Set Pinata JWT first',true);
 async function uploadVideo(inp){var file=inp.files[0];if(!file)return;document.getElementById('vid-label').textContent='Uploading...';try{var fd=new FormData();fd.append('file',file);fd.append('pinataMetadata',JSON.stringify({name:'sg-vid-'+Date.now()}));var res=await fetch(PINATA_API+'/pinning/pinFileToIPFS',{method:'POST',headers:{Authorization:'Bearer '+pinataJWT},body:fd});if(!res.ok)throw new Error(await res.text());var data=await res.json();currentVideoHash=data.IpfsHash;document.getElementById('vid-pre').innerHTML='<video src="'+PINATA_GATEWAY+data.IpfsHash+'" style="max-height:70px;border-radius:6px;margin-bottom:.4rem;max-width:100%" muted playsinline></video>';document.getElementById('vid-label').textContent='📌 '+data.IpfsHash.slice(0,20)+'...';showToast('Video uploaded to IPFS ✓');}catch(e){showToast('Upload failed: '+e.message,true);document.getElementById('vid-label').textContent='🎬 Click to upload video';}}
 function removeVideo(){currentVideoHash='';var pre=document.getElementById('vid-pre');if(pre)pre.innerHTML='<div style="font-size:.7rem;color:#3a2a5a;margin-bottom:.4rem">No video</div>';var lbl=document.getElementById('vid-label');if(lbl)lbl.textContent='🎬 Click to upload video';}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  RENDER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════
+
 function renderStats(){var el=document.getElementById('stats-row');if(!el)return;if(!stats.length){el.innerHTML='';return;}el.innerHTML=stats.map(function(s){return '<div class="stat"><div class="stat-n" id="'+s.id+'">'+s.value+s.suffix+'</div><div class="stat-l">'+esc(s.label)+'</div></div>';}).join('');var statObs=new IntersectionObserver(function(entries){entries.forEach(function(entry){if(!entry.isIntersecting)return;stats.forEach(function(s){var elem=document.getElementById(s.id);if(!elem)return;var cur=0,step=s.value/40;var t=setInterval(function(){cur+=step;if(cur>=s.value){cur=s.value;clearInterval(t);}elem.textContent=Math.ceil(cur)+s.suffix;},40);});statObs.disconnect();});},{threshold:.5});statObs.observe(el);}
 
 function renderSkills(){var el=document.getElementById('skills-grid');if(!el)return;if(!skills.length){el.innerHTML='<div style="color:var(--muted);font-size:.85rem;padding:2rem;text-align:center">No skills added yet</div>';return;}el.innerHTML=skills.map(function(sk){return '<div class="skill-card '+sk.theme+' reveal"><div class="skill-title" style="color:'+sk.color+'">'+sk.icon+' &nbsp;'+esc(sk.title)+'</div><div class="skill-tags">'+sk.tags.map(function(t){return '<span class="stag">'+esc(t)+'</span>';}).join('')+'</div></div>';}).join('');reObserve();}
@@ -606,14 +584,13 @@ function renderEducation(){var el=document.getElementById('edu-grid');if(!el)ret
 
 function renderContact(){var el=document.getElementById('contact-cards');if(!el)return;if(!contact.length){el.innerHTML='<div style="color:var(--muted);font-size:.85rem;padding:2rem">No contact info added yet</div>';return;}el.innerHTML=contact.map(function(c){return '<a href="'+c.href+'" class="contact-card" '+(c.href.startsWith('http')?'target="_blank"':'')+'><span class="cc-icon">'+c.icon+'</span><span class="cc-label">'+esc(c.label)+'</span><span class="cc-val">'+esc(c.value)+'</span></a>';}).join('');}
 
-// ═══════════════════════════════════════════════════════════════════════
+
 //  TYPEWRITER
-// ═══════════════════════════════════════════════════════════════════════
+
 function startTypewriter(){var LINES=[{type:'comment',text:'About me...Had shortened'},{type:'blank'},{type:'prop',key:'name',val:'"Krish"',valClass:'t-str'},{type:'prop',key:'role',val:'"Software Engineer"',valClass:'t-str'},{type:'prop',key:'stack',val:'["Full-Stack", "Blockchain"]',valClass:'t-str',isArr:true},{type:'prop',key:'status',val:'"open to work"',valClass:'t-str'},{type:'method',key:'build',val:'"future"'},{type:'close',text:'};'}];function buildLineHTML(line,charCount){switch(line.type){case'blank':return{html:'<br>',totalChars:0};case'comment':return charCount>=line.text.length?{html:'<span class="t-comment">'+line.text+'</span>',totalChars:line.text.length}:{html:line.text.slice(0,charCount),totalChars:line.text.length};case'prop':{var raw='  '+line.key+': '+line.val+',';var ch=charCount;var html='';var parts=[{t:'  '},{t:line.key,cls:'t-var'},{t:': '}];if(line.isArr){parts=parts.concat([{t:'['},{t:'"Full-Stack"',cls:'t-str'},{t:', '},{t:'"Blockchain"',cls:'t-str'},{t:']'},{t:','}]);}else{parts=parts.concat([{t:line.val,cls:line.valClass},{t:','}]);}for(var i=0;i<parts.length;i++){var p=parts[i];if(ch<=0)break;var s=p.t;if(ch>=s.length){html+=p.cls?'<span class="'+p.cls+'">'+s+'</span>':s;ch-=s.length;}else{html+=p.cls?'<span class="'+p.cls+'">'+s.slice(0,ch)+'</span>':s.slice(0,ch);break;}}return{html:html,totalChars:raw.length};}case'method':{var raw='  build: () => "future"';var ch=charCount;var html='';var parts=[{t:'  '},{t:'build',cls:'t-fn'},{t:': () => '},{t:'"future"',cls:'t-str'}];for(var i=0;i<parts.length;i++){var p=parts[i];if(ch<=0)break;var s=p.t;if(ch>=s.length){html+=p.cls?'<span class="'+p.cls+'">'+s+'</span>':s;ch-=s.length;}else{html+=p.cls?'<span class="'+p.cls+'">'+s.slice(0,ch)+'</span>':s.slice(0,ch);break;}}return{html:html,totalChars:raw.length};}case'close':return charCount>=line.text.length?{html:line.text,totalChars:line.text.length}:{html:line.text.slice(0,charCount),totalChars:line.text.length};default:return{html:'',totalChars:0};}}var totalChars=0;for(var i=0;i<LINES.length;i++){if(LINES[i].type!=='blank')totalChars+=buildLineHTML(LINES[i],9999).totalChars;}var pos=0,direction=1,pausing=false;function render(charPos){var out=document.getElementById('typewriter-output');if(!out)return;var html='',charsLeft=charPos;for(var i=0;i<LINES.length;i++){var line=LINES[i];if(line.type==='blank'){html+='<br>';continue;}var r=buildLineHTML(line,charsLeft);html+=r.html;charsLeft-=r.totalChars;if(charsLeft<=0){html+='<span class="t-cur">&#9611;</span><br>';for(var j=i+1;j<LINES.length;j++)html+='<br>';break;}html+='<br>';}out.innerHTML=html;}function tick(){if(pausing)return;render(pos);if(direction===1){if(pos>=totalChars){pausing=true;setTimeout(function(){direction=-1;pausing=false;tick();},2200);return;}pos++;setTimeout(tick,38);}else{if(pos<=0){pausing=true;setTimeout(function(){direction=1;pausing=false;tick();},500);return;}pos--;setTimeout(tick,18);}}setTimeout(tick,800);}
 
-// ═══════════════════════════════════════════════════════════════════════
 //  CORE UTILITIES
-// ═══════════════════════════════════════════════════════════════════════
+
 function modal(html){document.getElementById('modal-root').innerHTML=html;}
 function cm(id){var el=document.getElementById(id);if(el)el.remove();}
 function oci(e,id){if(e.target===e.currentTarget)cm(id);}
