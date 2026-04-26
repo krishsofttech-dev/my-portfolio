@@ -37,16 +37,9 @@ function onFirebaseReady() {
   loadSiteData();
 }
 
-//  PINATA — All site data stored on IPFS
-
-// ── PINATA_GATEWAY: used only for media src attributes (img, video, a href).
-//    These are loaded by the browser directly and are NOT fetch() calls,
-//    so they are NOT subject to CORS restrictions.
 const PINATA_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
 
-// ── IPFS_FETCH_GATEWAYS: used exclusively for fetch() calls (JSON data loading).
-//    These gateways must support CORS. ipfs.io and dweb.link both do.
-//    The Pinata public gateway is intentionally excluded here — it blocks CORS preflight.
+
 const IPFS_GATEWAYS = [
   'https://ipfs.io/ipfs/',
   'https://dweb.link/ipfs/',
@@ -207,9 +200,7 @@ function showPageLoader(show) {
   if (el) el.style.display = show ? 'flex' : 'none';
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════
 const CAT_COLORS = {
   blockchain:{ text:'#3b82f6', bg:'rgba(59,130,246,.1)',  border:'rgba(59,130,246,.25)' },
   web:       { text:'#10b981', bg:'rgba(16,185,129,.1)',  border:'rgba(16,185,129,.25)' },
@@ -218,16 +209,13 @@ const CAT_COLORS = {
   other:     { text:'#f43f5e', bg:'rgba(244,63,94,.1)',   border:'rgba(244,63,94,.25)'  }
 };
 
-// ── Global state ──────────────────────────────────────────────────────
 let stats=[], skills=[], projects=[], experience=[], education=[], contact=[];
 let profile={ githubUrl:'', linkedinUrl:'', cvIpfsHash:'', cvDirectUrl:'', cvFileName:'CV.pdf' };
 let activeFilter='all', editingId=null, techTags=[];
 let currentImgHash='', currentVideoHash='';
 let adminUnlocked=false, activeSect='projects';
 
-// ═══════════════════════════════════════════════════════════════════════
 //  PROFILE LINKS
-// ═══════════════════════════════════════════════════════════════════════
 function applyProfileLinks() {
   var cvUrl = profile.cvIpfsHash ? (PINATA_GATEWAY+profile.cvIpfsHash) : (profile.cvDirectUrl||'#');
   document.querySelectorAll('[data-cv-btn],.btn-cv').forEach(function(el){
