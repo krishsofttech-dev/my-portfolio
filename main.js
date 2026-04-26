@@ -13,7 +13,8 @@
 (function loadFirebase() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
-    'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js'
+    'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js',
+    'https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js'
   ];
   var loaded = 0;
   scripts.forEach(function(src) {
@@ -24,50 +25,51 @@
   });
 })();
 
+// ── CHANGE 2: Initialize DB + call loadSiteData here ─────────────────
 function onFirebaseReady() {
   firebase.initializeApp(firebaseConfig);
   var auth = firebase.auth();
+  var db   = firebase.database();
+  window._fbAuth = auth;
+  window._fbDb   = db;
   auth.onAuthStateChanged(function(user) {
     if (user) { unlockAdmin(); } else { lockAdmin(); }
   });
-  window._fbAuth = auth;
+  // Load site data now that Firebase DB is ready
+  loadSiteData();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  PINATA — All site data stored on IPFS
-//
-//  HOW IT WORKS:
-//  - Admin saves data → uploads JSON to Pinata → gets IPFS hash
-//  - Hash is saved to localStorage as 'sg_latest_hash'
-//  - Every visitor (including admin) loads from that public IPFS hash
-//  - No JWT needed to READ from IPFS — it's public
-//  - JWT only needed to WRITE (admin saves)
-//  - JWT is stored permanently in localStorage until admin clears it
 // ═══════════════════════════════════════════════════════════════════════
 const PINATA_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
 const PINATA_API     = 'https://api.pinata.cloud';
 const DATA_FILE_NAME = 'sg-site-data';
 
-// JWT stored permanently — only admin needs this
 let pinataJWT   = localStorage.getItem('sg_pinata_jwt')   || '';
-// Latest hash stored after each admin save — used by all visitors
 let latestHash  = localStorage.getItem('sg_latest_hash')  || '';
 
-// ── Load site data from IPFS (public, no JWT needed) ─────────────────
+// ── CHANGE 4: loadSiteData now reads hash from Firebase first ─────────
 async function loadSiteData() {
   showPageLoader(true);
   try {
+    // Always ask Firebase for the canonical latest hash first
+    var firebaseHash = await getHashFromFirebase();
+    if (firebaseHash) {
+      latestHash = firebaseHash;
+      localStorage.setItem('sg_latest_hash', firebaseHash);
+    }
+
     if (latestHash) {
-      // Load from the known latest hash — fast, public, no auth needed
-      var res = await fetch(PINATA_GATEWAY + latestHash);
+      // Cache-bust so IPFS gateways don't serve stale content
+      var res = await fetch(PINATA_GATEWAY + latestHash + '?t=' + Date.now());
       if (!res.ok) throw new Error('IPFS fetch failed');
-      var data = await res.json();
-      applyData(data);
+      applyData(await res.json());
       showPageLoader(false);
       return;
     }
 
-    // No hash yet — if admin JWT exists, search Pinata for latest file
+    // Last resort: admin device with JWT — search Pinata pin list
     if (pinataJWT) {
       var listRes = await fetch(
         PINATA_API + '/data/pinList?status=pinned&metadata[name]=' + DATA_FILE_NAME + '&pageLimit=1',
@@ -76,18 +78,17 @@ async function loadSiteData() {
       if (listRes.ok) {
         var list = await listRes.json();
         if (list.rows && list.rows.length > 0) {
-          // Sort newest first
           list.rows.sort(function(a,b){ return new Date(b.date_pinned)-new Date(a.date_pinned); });
           var hash = list.rows[0].ipfs_pin_hash;
           localStorage.setItem('sg_latest_hash', hash);
           latestHash = hash;
+          await pushHashToFirebase(hash);
           var dataRes = await fetch(PINATA_GATEWAY + hash);
           if (dataRes.ok) { applyData(await dataRes.json()); showPageLoader(false); return; }
         }
       }
     }
 
-    // No data anywhere yet — show empty site
     applyData({});
   } catch(e) {
     console.warn('Could not load site data:', e.message);
@@ -96,7 +97,7 @@ async function loadSiteData() {
   showPageLoader(false);
 }
 
-// ── Save all data to Pinata → update latest hash → all visitors see it ─
+// ── CHANGE 5: saveSiteData now pushes hash to Firebase after saving ───
 async function saveSiteData() {
   if (!pinataJWT) { showToast('Set Pinata JWT first', true); return false; }
 
@@ -107,15 +108,13 @@ async function saveSiteData() {
   };
 
   try {
-    // Unpin old version to keep Pinata clean
     if (latestHash) {
       await fetch(PINATA_API + '/pinning/unpin/' + latestHash, {
         method: 'DELETE',
         headers: { Authorization: 'Bearer ' + pinataJWT }
-      }).catch(function(){});  // ignore unpin errors
+      }).catch(function(){});
     }
 
-    // Upload new JSON
     var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     var fd = new FormData();
     fd.append('file', blob, DATA_FILE_NAME + '.json');
@@ -130,10 +129,13 @@ async function saveSiteData() {
     if (!res.ok) throw new Error(await res.text());
 
     var uploaded = await res.json();
-    // Save hash permanently — this is what all visitors will load
     latestHash = uploaded.IpfsHash;
     localStorage.setItem('sg_latest_hash', latestHash);
-    console.log('Saved to IPFS:', latestHash);
+
+    // Push new hash to Firebase — all other devices will pick this up
+    await pushHashToFirebase(latestHash);
+
+    console.log('Saved to IPFS & synced to Firebase:', latestHash);
     return true;
 
   } catch(e) {
@@ -146,6 +148,27 @@ async function saveAndSync(msg) {
   showToast('Saving to Pinata…');
   var ok = await saveSiteData();
   if (ok) showToast(msg || 'Saved ✓');
+}
+
+// ── CHANGE 6: Firebase helper functions ──────────────────────────────
+async function pushHashToFirebase(hash) {
+  try {
+    if (!window._fbDb) return;
+    await window._fbDb.ref('site/latestHash').set(hash);
+  } catch(e) {
+    console.warn('Firebase hash push failed:', e.message);
+  }
+}
+
+async function getHashFromFirebase() {
+  try {
+    if (!window._fbDb) return '';
+    var snap = await window._fbDb.ref('site/latestHash').get();
+    return snap.exists() ? snap.val() : '';
+  } catch(e) {
+    console.warn('Firebase hash read failed:', e.message);
+    return '';
+  }
 }
 
 // ── Apply data to global vars and render everything ───────────────────
@@ -165,7 +188,6 @@ function applyData(data) {
   startTypewriter();
 }
 
-// ── Page loader shown while fetching IPFS data ────────────────────────
 function showPageLoader(show) {
   var el = document.getElementById('page-loader');
   if (el) el.style.display = show ? 'flex' : 'none';
@@ -189,8 +211,8 @@ let activeFilter='all', editingId=null, techTags=[];
 let currentImgHash='', currentVideoHash='';
 let adminUnlocked=false, activeSect='projects';
 
-// ── Boot: load from IPFS immediately ─────────────────────────────────
-loadSiteData();
+// ── CHANGE 3: REMOVED standalone loadSiteData() call ─────────────────
+// loadSiteData() is now called inside onFirebaseReady() above
 
 // ═══════════════════════════════════════════════════════════════════════
 //  PROFILE LINKS
@@ -308,7 +330,7 @@ function switchAdminTab(key){activeSect=key;document.querySelectorAll('[id^="ata
 function getTabContent(key){switch(key){case'projects':return buildProjectsTab();case'skills':return buildSkillsTab();case'stats':return buildStatsTab();case'experience':return buildExperienceTab();case'education':return buildEducationTab();case'contact':return buildContactTab();case'links':return buildLinksTab();default:return'';}}
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PINATA JWT MODAL — JWT saved permanently until admin clears it
+//  PINATA JWT MODAL
 // ═══════════════════════════════════════════════════════════════════════
 function openPinataModal(){
   if(!adminUnlocked)return;
@@ -340,7 +362,6 @@ function saveJWT(){
   updatePinataLabel();
   cm('pin');
   showToast('Pinata JWT saved permanently ✓');
-  // Try to load data now that we have a JWT
   if(!latestHash) loadSiteData();
 }
 
@@ -535,7 +556,7 @@ function pickContactIcon(i){document.getElementById('c-icon').value=i;document.q
 async function saveContactForm(){var label=document.getElementById('c-label').value.trim();if(!label){showToast('Label required',true);return;}var c={id:editingId||('c'+Date.now()),icon:document.getElementById('c-icon').value,label:label,value:document.getElementById('c-value').value.trim(),href:document.getElementById('c-href').value.trim()};if(editingId){contact=contact.map(function(x){return x.id===editingId?c:x;});}else{contact.push(c);}renderContact();await saveAndSync('Contact saved to IPFS ✓');activeSect='contact';openAdmin();}
 
 // ═══════════════════════════════════════════════════════════════════════
-//  DELETE — works for all types including stats
+//  DELETE
 // ═══════════════════════════════════════════════════════════════════════
 async function deleteItem(type,id){
   if(!confirm('Remove this item?'))return;
@@ -602,4 +623,3 @@ var obs=new IntersectionObserver(function(entries){entries.forEach(function(e,i)
 function reObserve(){document.querySelectorAll('.reveal').forEach(function(el){if(!el.classList.contains('in'))obs.observe(el);});}
 document.querySelectorAll('.reveal').forEach(function(el){obs.observe(el);});
 document.addEventListener('keydown',function(e){if(e.ctrlKey&&e.shiftKey&&e.key==='A'){e.preventDefault();triggerAdminLogin();}});
-
