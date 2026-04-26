@@ -9,7 +9,6 @@
   appId: "1:668360160690:web:08661a97217e20bd1fa0ab"
 };
 
-
 (function loadFirebase() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
@@ -40,13 +39,33 @@ function onFirebaseReady() {
 
 //  PINATA — All site data stored on IPFS
 
-const PINATA_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
+// ── CHANGE: Use dedicated Pinata gateway (CORS-friendly). Replace <your-subdomain> with your actual subdomain from Pinata dashboard → Gateways.
+const PINATA_GATEWAY = 'https://<your-subdomain>.mypinata.cloud/ipfs/';
+
+// ── Fallback gateways used only for fetch() calls (data loading).
+// Media tags (img/video/a) are not affected by CORS so they use PINATA_GATEWAY directly.
+const IPFS_GATEWAYS = [
+  'https://<your-subdomain>.mypinata.cloud/ipfs/',
+  'https://ipfs.io/ipfs/',
+  'https://cloudflare-ipfs.com/ipfs/',
+];
+
 const PINATA_API     = 'https://api.pinata.cloud';
 const DATA_FILE_NAME = 'sg-site-data';
 
 let pinataJWT   = localStorage.getItem('sg_pinata_jwt')   || '';
 let latestHash  = localStorage.getItem('sg_latest_hash')  || '';
 
+// ── CORS-safe fetch helper: tries each gateway in order ──────────────
+async function fetchFromIPFS(hash) {
+  for (var i = 0; i < IPFS_GATEWAYS.length; i++) {
+    try {
+      var res = await fetch(IPFS_GATEWAYS[i] + hash + '?t=' + Date.now());
+      if (res.ok) return res;
+    } catch (e) { /* try next gateway */ }
+  }
+  throw new Error('All IPFS gateways failed');
+}
 
 async function loadSiteData() {
   showPageLoader(true);
@@ -58,15 +77,13 @@ async function loadSiteData() {
     }
 
     if (latestHash) {
-
-      var res = await fetch(PINATA_GATEWAY + latestHash + '?t=' + Date.now());
+      var res = await fetchFromIPFS(latestHash);
       if (!res.ok) throw new Error('IPFS fetch failed');
       applyData(await res.json());
       showPageLoader(false);
       return;
     }
 
-   
     if (pinataJWT) {
       var listRes = await fetch(
         PINATA_API + '/data/pinList?status=pinned&metadata[name]=' + DATA_FILE_NAME + '&pageLimit=1',
@@ -80,7 +97,7 @@ async function loadSiteData() {
           localStorage.setItem('sg_latest_hash', hash);
           latestHash = hash;
           await pushHashToFirebase(hash);
-          var dataRes = await fetch(PINATA_GATEWAY + hash);
+          var dataRes = await fetchFromIPFS(hash);
           if (dataRes.ok) { applyData(await dataRes.json()); showPageLoader(false); return; }
         }
       }
@@ -128,7 +145,6 @@ async function saveSiteData() {
     latestHash = uploaded.IpfsHash;
     localStorage.setItem('sg_latest_hash', latestHash);
 
-   
     await pushHashToFirebase(latestHash);
 
     console.log('Saved to IPFS & synced to Firebase:', latestHash);
@@ -145,7 +161,6 @@ async function saveAndSync(msg) {
   var ok = await saveSiteData();
   if (ok) showToast(msg || 'Saved ✓');
 }
-
 
 async function pushHashToFirebase(hash) {
   try {
@@ -207,9 +222,6 @@ let activeFilter='all', editingId=null, techTags=[];
 let currentImgHash='', currentVideoHash='';
 let adminUnlocked=false, activeSect='projects';
 
-// ── CHANGE 3: REMOVED standalone loadSiteData() call ─────────────────
-// loadSiteData() is now called inside onFirebaseReady() above
-
 // ═══════════════════════════════════════════════════════════════════════
 //  PROFILE LINKS
 // ═══════════════════════════════════════════════════════════════════════
@@ -230,8 +242,7 @@ function applyProfileLinks() {
   });
 }
 
-
-//  FIREBASE 
+//  FIREBASE
 
 function unlockAdmin() {
   adminUnlocked=true;
@@ -496,6 +507,7 @@ async function saveProjectForm(){
   await saveAndSync('Project saved to IPFS ✓');
   activeSect='projects';openAdmin();
 }
+
 //  SKILLS TAB
 
 function buildSkillsTab(){var rows=skills.map(function(sk){return '<div style="display:flex;align-items:center;gap:.75rem;padding:.7rem;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem"><span style="font-size:1.2rem">'+sk.icon+'</span><div style="flex:1"><div style="font-size:.82rem;font-weight:500">'+esc(sk.title)+'</div><div style="font-size:.68rem;color:var(--muted);margin-top:.15rem">'+sk.tags.join(', ')+'</div></div><button onclick="editSkill(\''+sk.id+'\')" class="abtn-edit">Edit</button><button onclick="deleteItem(\'skills\',\''+sk.id+'\')" class="abtn-del">Del</button></div>';}).join('');return '<button onclick="addSkill()" class="abtn-add">+ New Skill Category</button>'+rows;}
@@ -550,6 +562,7 @@ async function deleteItem(type,id){
   await saveAndSync('Removed & saved to IPFS ✓');
   activeSect=type;openAdmin();
 }
+
 //  UPLOAD HELPERS
 
 function pickE(e){document.getElementById('f-emoji').value=e;document.querySelectorAll('#epicker button').forEach(function(b){var s=b.textContent===e;b.style.border='1px solid '+(s?'var(--cyan)':'var(--border)');b.style.background=s?'rgba(0,212,255,.1)':'rgba(255,255,255,.03)';});}
@@ -583,7 +596,6 @@ function renderExperience(){var el=document.getElementById('timeline');if(!el)re
 function renderEducation(){var el=document.getElementById('edu-grid');if(!el)return;if(!education.length){el.innerHTML='<div style="color:var(--muted);font-size:.85rem;padding:2rem">No education added yet</div>';return;}var BS={cyan:'background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.2);color:var(--cyan)',purple:'background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);color:var(--purple)',green:'background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);color:var(--green)',blue:'background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);color:#3b82f6',orange:'background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.25);color:#f97316'};el.innerHTML=education.map(function(ed){var iconHtml=ed.logoUrl?'<img src="'+ed.logoUrl+'" onerror="this.parentElement.innerHTML=\''+ed.badgeEmoji+'\'" alt="'+esc(ed.school)+'" />':'<span style="font-size:1.5rem">'+ed.badgeEmoji+'</span>';var bs=BS[ed.badgeColor]||BS.cyan;return '<div class="edu-card reveal"><div class="edu-icon" style="background:rgba('+ed.accentColor+',.12);border-color:rgba('+ed.accentColor+',.3)">'+iconHtml+'</div><div style="flex:1"><div class="edu-deg">'+esc(ed.deg)+'</div><div class="edu-school">'+esc(ed.school)+'</div><div class="edu-year">'+esc(ed.year)+(ed.location?' &nbsp;&middot;&nbsp; '+esc(ed.location):'')+'</div><span class="edu-badge" style="'+bs+'">'+ed.badgeEmoji+' '+esc(ed.badge)+'</span></div></div>';}).join('');reObserve();}
 
 function renderContact(){var el=document.getElementById('contact-cards');if(!el)return;if(!contact.length){el.innerHTML='<div style="color:var(--muted);font-size:.85rem;padding:2rem">No contact info added yet</div>';return;}el.innerHTML=contact.map(function(c){return '<a href="'+c.href+'" class="contact-card" '+(c.href.startsWith('http')?'target="_blank"':'')+'><span class="cc-icon">'+c.icon+'</span><span class="cc-label">'+esc(c.label)+'</span><span class="cc-val">'+esc(c.value)+'</span></a>';}).join('');}
-
 
 //  TYPEWRITER
 
