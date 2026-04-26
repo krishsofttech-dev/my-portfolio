@@ -39,14 +39,17 @@ function onFirebaseReady() {
 
 //  PINATA — All site data stored on IPFS
 
-// ── CHANGE: Use dedicated Pinata gateway (CORS-friendly). Replace <your-subdomain> with your actual subdomain from Pinata dashboard → Gateways.
-const PINATA_GATEWAY = 'https://<your-subdomain>.mypinata.cloud/ipfs/';
+// ── PINATA_GATEWAY: used only for media src attributes (img, video, a href).
+//    These are loaded by the browser directly and are NOT fetch() calls,
+//    so they are NOT subject to CORS restrictions.
+const PINATA_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
 
-// ── Fallback gateways used only for fetch() calls (data loading).
-// Media tags (img/video/a) are not affected by CORS so they use PINATA_GATEWAY directly.
+// ── IPFS_FETCH_GATEWAYS: used exclusively for fetch() calls (JSON data loading).
+//    These gateways must support CORS. ipfs.io and dweb.link both do.
+//    The Pinata public gateway is intentionally excluded here — it blocks CORS preflight.
 const IPFS_GATEWAYS = [
-  'https://<your-subdomain>.mypinata.cloud/ipfs/',
   'https://ipfs.io/ipfs/',
+  'https://dweb.link/ipfs/',
   'https://cloudflare-ipfs.com/ipfs/',
 ];
 
@@ -601,7 +604,7 @@ function renderContact(){var el=document.getElementById('contact-cards');if(!el)
 
 function startTypewriter(){var LINES=[{type:'comment',text:'About me...Had shortened'},{type:'blank'},{type:'prop',key:'name',val:'"Krish"',valClass:'t-str'},{type:'prop',key:'role',val:'"Software Engineer"',valClass:'t-str'},{type:'prop',key:'stack',val:'["Full-Stack", "Blockchain"]',valClass:'t-str',isArr:true},{type:'prop',key:'status',val:'"open to work"',valClass:'t-str'},{type:'method',key:'build',val:'"future"'},{type:'close',text:'};'}];function buildLineHTML(line,charCount){switch(line.type){case'blank':return{html:'<br>',totalChars:0};case'comment':return charCount>=line.text.length?{html:'<span class="t-comment">'+line.text+'</span>',totalChars:line.text.length}:{html:line.text.slice(0,charCount),totalChars:line.text.length};case'prop':{var raw='  '+line.key+': '+line.val+',';var ch=charCount;var html='';var parts=[{t:'  '},{t:line.key,cls:'t-var'},{t:': '}];if(line.isArr){parts=parts.concat([{t:'['},{t:'"Full-Stack"',cls:'t-str'},{t:', '},{t:'"Blockchain"',cls:'t-str'},{t:']'},{t:','}]);}else{parts=parts.concat([{t:line.val,cls:line.valClass},{t:','}]);}for(var i=0;i<parts.length;i++){var p=parts[i];if(ch<=0)break;var s=p.t;if(ch>=s.length){html+=p.cls?'<span class="'+p.cls+'">'+s+'</span>':s;ch-=s.length;}else{html+=p.cls?'<span class="'+p.cls+'">'+s.slice(0,ch)+'</span>':s.slice(0,ch);break;}}return{html:html,totalChars:raw.length};}case'method':{var raw='  build: () => "future"';var ch=charCount;var html='';var parts=[{t:'  '},{t:'build',cls:'t-fn'},{t:': () => '},{t:'"future"',cls:'t-str'}];for(var i=0;i<parts.length;i++){var p=parts[i];if(ch<=0)break;var s=p.t;if(ch>=s.length){html+=p.cls?'<span class="'+p.cls+'">'+s+'</span>':s;ch-=s.length;}else{html+=p.cls?'<span class="'+p.cls+'">'+s.slice(0,ch)+'</span>':s.slice(0,ch);break;}}return{html:html,totalChars:raw.length};}case'close':return charCount>=line.text.length?{html:line.text,totalChars:line.text.length}:{html:line.text.slice(0,charCount),totalChars:line.text.length};default:return{html:'',totalChars:0};}}var totalChars=0;for(var i=0;i<LINES.length;i++){if(LINES[i].type!=='blank')totalChars+=buildLineHTML(LINES[i],9999).totalChars;}var pos=0,direction=1,pausing=false;function render(charPos){var out=document.getElementById('typewriter-output');if(!out)return;var html='',charsLeft=charPos;for(var i=0;i<LINES.length;i++){var line=LINES[i];if(line.type==='blank'){html+='<br>';continue;}var r=buildLineHTML(line,charsLeft);html+=r.html;charsLeft-=r.totalChars;if(charsLeft<=0){html+='<span class="t-cur">&#9611;</span><br>';for(var j=i+1;j<LINES.length;j++)html+='<br>';break;}html+='<br>';}out.innerHTML=html;}function tick(){if(pausing)return;render(pos);if(direction===1){if(pos>=totalChars){pausing=true;setTimeout(function(){direction=-1;pausing=false;tick();},2200);return;}pos++;setTimeout(tick,38);}else{if(pos<=0){pausing=true;setTimeout(function(){direction=1;pausing=false;tick();},500);return;}pos--;setTimeout(tick,18);}}setTimeout(tick,800);}
 
-//  CORE UTILITIES
+// CORE UTILITIES
 
 function modal(html){document.getElementById('modal-root').innerHTML=html;}
 function cm(id){var el=document.getElementById(id);if(el)el.remove();}
